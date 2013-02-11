@@ -382,8 +382,14 @@ class Annotated(object):
             clone.__dict__.update(self.__dict__)
             return Annotated(clone, self._annotations)
 
+
     def __hash__(self):
-        return hash(self.__element)
+        # it seems that sometimes during deserialization, things may break a bit
+        try:
+            return hash(self.__element)
+        except AttributeError:
+            return 0
+
 
     def __eq__(self, other):
         if isinstance(self.__element, expression.ColumnOperators):
