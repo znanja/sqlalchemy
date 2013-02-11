@@ -120,8 +120,9 @@ def Deserializer(file, metadata=None, scoped_session=None, engine=None):
         else:
             return None
 
-    def persistent_load(id):
-        m = our_ids.match(id)
+    def persistent_load(id_):
+        id_ = id_.decode('ascii')
+        m = our_ids.match(id_)
         if not m:
             return None
         else:
