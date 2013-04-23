@@ -126,6 +126,7 @@ def Deserializer(file, metadata=None, scoped_session=None, engine=None):
             return None
 
     def persistent_load(id):
+        id = str(id)
         m = our_ids.match(id)
         if not m:
             return None
