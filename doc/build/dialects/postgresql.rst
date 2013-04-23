@@ -14,18 +14,24 @@ they originate from :mod:`sqlalchemy.types` or from the local dialect::
 
     from sqlalchemy.dialects.postgresql import \
         ARRAY, BIGINT, BIT, BOOLEAN, BYTEA, CHAR, CIDR, DATE, \
-        DOUBLE_PRECISION, ENUM, FLOAT, INET, INTEGER, INTERVAL, \
-        MACADDR, NUMERIC, REAL, SMALLINT, TEXT, TIME, TIMESTAMP, \
-        UUID, VARCHAR
+        DOUBLE_PRECISION, ENUM, FLOAT, HSTORE, INET, INTEGER, \
+        INTERVAL, MACADDR, NUMERIC, REAL, SMALLINT, TEXT, TIME, \
+        TIMESTAMP, UUID, VARCHAR
 
 Types which are specific to PostgreSQL, or have PostgreSQL-specific
 construction arguments, are as follows:
 
 .. currentmodule:: sqlalchemy.dialects.postgresql
 
+.. autoclass:: array
+
 .. autoclass:: ARRAY
-    :members: __init__
+    :members: __init__, Comparator
     :show-inheritance:
+
+.. autoclass:: Any
+
+.. autoclass:: All
 
 .. autoclass:: BIT
     :members: __init__
@@ -45,6 +51,14 @@ construction arguments, are as follows:
 
 .. autoclass:: ENUM
     :members: __init__, create, drop
+    :show-inheritance:
+
+.. autoclass:: HSTORE
+    :members:
+    :show-inheritance:
+
+.. autoclass:: hstore
+    :members:
     :show-inheritance:
 
 .. autoclass:: INET
@@ -67,24 +81,22 @@ construction arguments, are as follows:
     :members: __init__
     :show-inheritance:
 
-
-psycopg2 Notes
+psycopg2
 --------------
 
 .. automodule:: sqlalchemy.dialects.postgresql.psycopg2
 
-
-py-postgresql Notes
+py-postgresql
 --------------------
 
 .. automodule:: sqlalchemy.dialects.postgresql.pypostgresql
 
-pg8000 Notes
+pg8000
 --------------
 
 .. automodule:: sqlalchemy.dialects.postgresql.pg8000
 
-zxjdbc Notes
+zxjdbc
 --------------
 
 .. automodule:: sqlalchemy.dialects.postgresql.zxjdbc

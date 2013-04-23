@@ -1,9 +1,9 @@
 from sqlalchemy import *
 from sqlalchemy import exc as sa_exc
 from sqlalchemy.orm import *
-from test.lib import *
-from test.lib.testing import assert_raises_message
-from test.lib import fixtures
+from sqlalchemy.testing import assert_raises_message
+from sqlalchemy.testing import fixtures
+from sqlalchemy import testing
 
 
 class CompileTest(fixtures.ORMTest):
@@ -167,8 +167,10 @@ class CompileTest(fixtures.ORMTest):
         b = Table('b', meta, Column('id', Integer, primary_key=True),
                                 Column('a_id', Integer, ForeignKey('a.id')))
 
-        class A(object):pass
-        class B(object):pass
+        class A(object):
+            pass
+        class B(object):
+            pass
 
         mapper(A, a, properties={
             'b':relationship(B, backref='a')
@@ -183,3 +185,29 @@ class CompileTest(fixtures.ORMTest):
             configure_mappers
         )
 
+    def test_conflicting_backref_subclass(self):
+        meta = MetaData()
+
+        a = Table('a', meta, Column('id', Integer, primary_key=True))
+        b = Table('b', meta, Column('id', Integer, primary_key=True),
+                                Column('a_id', Integer, ForeignKey('a.id')))
+
+        class A(object):
+            pass
+        class B(object):
+            pass
+        class C(B):
+            pass
+
+        mapper(A, a, properties={
+            'b': relationship(B, backref='a'),
+            'c': relationship(C, backref='a')
+        })
+        mapper(B, b)
+        mapper(C, None, inherits=B)
+
+        assert_raises_message(
+            sa_exc.ArgumentError,
+            "Error creating backref",
+            configure_mappers
+        )

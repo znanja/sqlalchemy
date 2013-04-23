@@ -1,21 +1,21 @@
 # coding: utf-8
-from test.lib.testing import eq_, assert_raises, assert_raises_message
+from sqlalchemy.testing import eq_, assert_raises, assert_raises_message
 import decimal
-import datetime, os, re
+import datetime
+import os
 from sqlalchemy import *
-from sqlalchemy import exc, types, util, schema, dialects
+from sqlalchemy import exc, types, util, dialects
 for name in dialects.__all__:
     __import__("sqlalchemy.dialects.%s" % name)
 from sqlalchemy.sql import operators, column, table
-from test.lib.testing import eq_
-import sqlalchemy.engine.url as url
 from sqlalchemy.engine import default
-from test.lib.schema import Table, Column
-from test.lib import *
-from test.lib.util import picklers
-from sqlalchemy.util.compat import decimal
-from test.lib.util import round_decimal
-from test.lib import fixtures
+from sqlalchemy.testing.schema import Table, Column
+from sqlalchemy import testing
+from sqlalchemy.testing import AssertsCompiledSQL, AssertsExecutionResults, \
+    engines, pickleable
+from sqlalchemy.testing.util import picklers
+from sqlalchemy.testing.util import round_decimal
+from sqlalchemy.testing import fixtures
 
 class AdaptTest(fixtures.TestBase):
     def _all_dialect_modules(self):
@@ -242,14 +242,13 @@ class PickleMetadataTest(fixtures.TestBase):
                 Column('Lar', LargeBinary()),
                 Column('Pic', PickleType()),
                 Column('Int', Interval()),
-                Column('Enu', Enum('x','y','z', name="somename")),
+                Column('Enu', Enum('x', 'y', 'z', name="somename")),
             ]
             for column_type in column_types:
-                #print column_type
                 meta = MetaData()
                 Table('foo', meta, column_type)
-                ct = loads(dumps(column_type))
-                mt = loads(dumps(meta))
+                loads(dumps(column_type))
+                loads(dumps(meta))
 
 
 class UserDefinedTest(fixtures.TablesTest, AssertsCompiledSQL):
@@ -303,7 +302,7 @@ class UserDefinedTest(fixtures.TablesTest, AssertsCompiledSQL):
                 raw_dialect_impl = raw_impl.dialect_impl(dialect_)
                 dec_dialect_impl = dec_type.dialect_impl(dialect_)
                 eq_(dec_dialect_impl.__class__, MyType)
-                eq_(raw_dialect_impl.__class__ , dec_dialect_impl.impl.__class__)
+                eq_(raw_dialect_impl.__class__, dec_dialect_impl.impl.__class__)
 
                 self.assert_compile(
                     MyType(**kw),
@@ -407,7 +406,7 @@ class UserDefinedTest(fixtures.TablesTest, AssertsCompiledSQL):
         t = Table('t', metadata, Column('data', String(50)))
         metadata.create_all()
 
-        t.insert().values(data=type_coerce('d1BIND_OUT',MyType)).execute()
+        t.insert().values(data=type_coerce('d1BIND_OUT', MyType)).execute()
 
         eq_(
             select([type_coerce(t.c.data, MyType)]).execute().fetchall(),
@@ -416,6 +415,12 @@ class UserDefinedTest(fixtures.TablesTest, AssertsCompiledSQL):
 
         eq_(
             select([t.c.data, type_coerce(t.c.data, MyType)]).execute().fetchall(),
+            [('d1', 'd1BIND_OUT')]
+        )
+
+        eq_(
+            select([t.c.data, type_coerce(t.c.data, MyType)]).
+                    alias().select().execute().fetchall(),
             [('d1', 'd1BIND_OUT')]
         )
 
@@ -445,6 +450,13 @@ class UserDefinedTest(fixtures.TablesTest, AssertsCompiledSQL):
                         where(type_coerce(t.c.data, MyType) == None).\
                         execute().fetchall(),
             []
+        )
+
+        eq_(
+            testing.db.scalar(
+                select([type_coerce(literal('d1BIND_OUT'), MyType)])
+            ),
+            'd1BIND_OUT'
         )
 
     @classmethod
@@ -651,155 +663,102 @@ class VariantTest(fixtures.TestBase, AssertsCompiledSQL):
             'fooUTWO'
         )
 
-class UnicodeTest(fixtures.TestBase, AssertsExecutionResults):
-    """tests the Unicode type.  also tests the TypeDecorator with instances in the types package."""
+class UnicodeTest(fixtures.TestBase):
+    """Exercise the Unicode and related types.
 
-    @classmethod
-    def setup_class(cls):
-        global unicode_table, metadata
-        metadata = MetaData(testing.db)
-        unicode_table = Table('unicode_table', metadata,
-            Column('id', Integer, Sequence('uni_id_seq', optional=True), primary_key=True),
-            Column('unicode_varchar', Unicode(250)),
-            Column('unicode_text', UnicodeText),
-            )
-        metadata.create_all()
+    Note:  unicode round trip tests are now in
+    sqlalchemy/testing/suite/test_types.py.
 
-    @classmethod
-    def teardown_class(cls):
-        metadata.drop_all()
-
-    @engines.close_first
-    def teardown(self):
-        unicode_table.delete().execute()
+    """
 
     def test_native_unicode(self):
         """assert expected values for 'native unicode' mode"""
 
-        if \
-	     (testing.against('mssql+pyodbc') and not testing.db.dialect.freetds):
-            assert testing.db.dialect.returns_unicode_strings == 'conditional'
-            return
+        if (testing.against('mssql+pyodbc') and
+                not testing.db.dialect.freetds) \
+                or testing.against('mssql+mxodbc'):
+            eq_(
+                testing.db.dialect.returns_unicode_strings,
+                'conditional'
+            )
 
-        if testing.against('mssql+pymssql'):
-            assert testing.db.dialect.returns_unicode_strings == ('charset' in testing.db.url.query)
-            return
+        elif testing.against('mssql+pymssql'):
+            eq_(
+                testing.db.dialect.returns_unicode_strings,
+                ('charset' in testing.db.url.query)
+            )
 
-        assert testing.db.dialect.returns_unicode_strings == \
-            ((testing.db.name, testing.db.driver) in \
-            (
-                ('postgresql','psycopg2'),
-                ('postgresql','pypostgresql'),
-                ('postgresql','pg8000'),
-                ('postgresql','zxjdbc'),
-                ('mysql','oursql'),
-                ('mysql','zxjdbc'),
-                ('mysql','mysqlconnector'),
-                ('mysql','pymysql'),
-                ('sqlite','pysqlite'),
-                ('oracle','zxjdbc'),
-                ('oracle','cx_oracle'),
-            )), \
-            "name: %s driver %s returns_unicode_strings=%s" % \
-                                        (testing.db.name,
-                                         testing.db.driver,
-                                         testing.db.dialect.returns_unicode_strings)
+        elif testing.against('mysql+cymysql', 'mysql+pymssql'):
+            eq_(
+                testing.db.dialect.returns_unicode_strings,
+                True if util.py3k else False
+            )
 
-    def test_round_trip(self):
-        unicodedata = u"Alors vous imaginez ma surprise, au lever du jour, "\
-                    u"quand une drôle de petite voix m’a réveillé. Elle "\
-                    u"disait: « S’il vous plaît… dessine-moi un mouton! »"
 
-        unicode_table.insert().execute(unicode_varchar=unicodedata,unicode_text=unicodedata)
-
-        x = unicode_table.select().execute().first()
-        assert isinstance(x['unicode_varchar'], unicode)
-        assert isinstance(x['unicode_text'], unicode)
-        eq_(x['unicode_varchar'], unicodedata)
-        eq_(x['unicode_text'], unicodedata)
-
-    def test_round_trip_executemany(self):
-        # cx_oracle was producing different behavior for cursor.executemany()
-        # vs. cursor.execute()
-
-        unicodedata = u"Alors vous imaginez ma surprise, au lever du jour, quand "\
-                        u"une drôle de petite voix m’a réveillé. "\
-                        u"Elle disait: « S’il vous plaît… dessine-moi un mouton! »"
-
-        unicode_table.insert().execute(
-                dict(unicode_varchar=unicodedata,unicode_text=unicodedata),
-                dict(unicode_varchar=unicodedata,unicode_text=unicodedata)
-        )
-
-        x = unicode_table.select().execute().first()
-        assert isinstance(x['unicode_varchar'], unicode)
-        eq_(x['unicode_varchar'], unicodedata)
-        assert isinstance(x['unicode_text'], unicode)
-        eq_(x['unicode_text'], unicodedata)
-
-    def test_union(self):
-        """ensure compiler processing works for UNIONs"""
-
-        unicodedata = u"Alors vous imaginez ma surprise, au lever du jour, quand "\
-                        u"une drôle de petite voix m’a réveillé. "\
-                        u"Elle disait: « S’il vous plaît… dessine-moi un mouton! »"
-
-        unicode_table.insert().execute(unicode_varchar=unicodedata,unicode_text=unicodedata)
-
-        x = union(
-                    select([unicode_table.c.unicode_varchar]),
-                    select([unicode_table.c.unicode_varchar])
-                ).execute().first()
-
-        assert isinstance(x['unicode_varchar'], unicode)
-        eq_(x['unicode_varchar'], unicodedata)
-
-    @testing.fails_on('oracle', 'oracle converts empty strings to a blank space')
-    def test_blank_strings(self):
-        unicode_table.insert().execute(unicode_varchar=u'')
-        assert select([unicode_table.c.unicode_varchar]).scalar() == u''
-
-    def test_unicode_warnings(self):
-        """test the warnings raised when SQLA must coerce unicode binds,
-        *and* is using the Unicode type.
-
-        """
-
-        unicodedata = u"Alors vous imaginez ma surprise, au lever du jour, quand "\
-                        u"une drôle de petite voix m’a réveillé. "\
-                        u"Elle disait: « S’il vous plaît… dessine-moi un mouton! »"
-
-        # using Unicode explicly - warning should be emitted
-        u = Unicode()
-        uni = u.dialect_impl(testing.db.dialect).bind_processor(testing.db.dialect)
-        if testing.db.dialect.supports_unicode_binds:
-            # Py3K
-            #assert_raises(exc.SAWarning, uni, b'x')
-            #assert isinstance(uni(unicodedata), str)
-            # Py2K
-            assert_raises(exc.SAWarning, uni, 'x')
-            assert isinstance(uni(unicodedata), unicode)
-            # end Py2K
-
-            eq_(uni(unicodedata), unicodedata)
         else:
-            # Py3K
-            #assert_raises(exc.SAWarning, uni, b'x')
-            #assert isinstance(uni(unicodedata), bytes)
-            # Py2K
-            assert_raises(exc.SAWarning, uni, 'x')
-            assert isinstance(uni(unicodedata), str)
-            # end Py2K
+            expected = (testing.db.name, testing.db.driver) in \
+                (
+                    ('postgresql', 'psycopg2'),
+                    ('postgresql', 'pypostgresql'),
+                    ('postgresql', 'pg8000'),
+                    ('postgresql', 'zxjdbc'),
+                    ('mysql', 'oursql'),
+                    ('mysql', 'zxjdbc'),
+                    ('mysql', 'mysqlconnector'),
+                    ('sqlite', 'pysqlite'),
+                    ('oracle', 'zxjdbc'),
+                    ('oracle', 'cx_oracle'),
+                )
 
-            eq_(uni(unicodedata), unicodedata.encode('utf-8'))
+            eq_(
+                testing.db.dialect.returns_unicode_strings,
+                expected
+            )
 
-        # using convert unicode at engine level -
-        # this should not be raising a warning
-        unicode_engine = engines.utf8_engine(options={'convert_unicode':True,})
-        unicode_engine.dialect.supports_unicode_binds = False
+    data = u"Alors vous imaginez ma surprise, au lever du jour, quand "\
+            u"une drôle de petite voix m’a réveillé. "\
+            u"Elle disait: « S’il vous plaît… dessine-moi un mouton! »"
+
+    def test_unicode_warnings_typelevel_native_unicode(self):
+
+        unicodedata = self.data
+        u = Unicode()
+        dialect = default.DefaultDialect()
+        dialect.supports_unicode_binds = True
+        uni = u.dialect_impl(dialect).bind_processor(dialect)
+        # Py3K
+        #assert_raises(exc.SAWarning, uni, b'x')
+        #assert isinstance(uni(unicodedata), str)
+        # Py2K
+        assert_raises(exc.SAWarning, uni, 'x')
+        assert isinstance(uni(unicodedata), unicode)
+        # end Py2K
+
+    def test_unicode_warnings_typelevel_sqla_unicode(self):
+        unicodedata = self.data
+        u = Unicode()
+        dialect = default.DefaultDialect()
+        dialect.supports_unicode_binds = False
+        uni = u.dialect_impl(dialect).bind_processor(dialect)
+        # Py3K
+        #assert_raises(exc.SAWarning, uni, b'x')
+        #assert isinstance(uni(unicodedata), bytes)
+        # Py2K
+        assert_raises(exc.SAWarning, uni, 'x')
+        assert isinstance(uni(unicodedata), str)
+        # end Py2K
+
+        eq_(uni(unicodedata), unicodedata.encode('utf-8'))
+
+    def test_unicode_warnings_dialectlevel(self):
+
+        unicodedata = self.data
+
+        dialect = default.DefaultDialect(convert_unicode=True)
+        dialect.supports_unicode_binds = False
 
         s = String()
-        uni = s.dialect_impl(unicode_engine.dialect).bind_processor(unicode_engine.dialect)
+        uni = s.dialect_impl(dialect).bind_processor(dialect)
         # this is not the unicode type - no warning
         # Py3K
         #uni(b'x')
@@ -811,103 +770,21 @@ class UnicodeTest(fixtures.TestBase, AssertsExecutionResults):
 
         eq_(uni(unicodedata), unicodedata.encode('utf-8'))
 
-    # Py3K
-    #@testing.fails_if(
-    #                    lambda: testing.db_spec("postgresql+pg8000")(testing.db),
-    #                    "pg8000 appropriately does not accept 'bytes' for a VARCHAR column."
-    #                    )
     def test_ignoring_unicode_error(self):
-        """checks String(unicode_error='ignore') is passed to underlying codec."""
+        """checks String(unicode_error='ignore') is passed to
+        underlying codec."""
 
-        unicodedata = u"Alors vous imaginez ma surprise, au lever du jour, quand "\
-                        u"une drôle de petite voix m’a réveillé. "\
-                        u"Elle disait: « S’il vous plaît… dessine-moi un mouton! »"
+        unicodedata = self.data
 
-        asciidata = unicodedata.encode('ascii', 'ignore')
+        type_ = String(248, convert_unicode='force', unicode_error='ignore')
+        dialect = default.DefaultDialect(encoding='ascii')
+        proc = type_.result_processor(dialect, 10)
 
-        m = MetaData()
-        table = Table('unicode_err_table', m,
-            Column('sort', Integer),
-            Column('plain_varchar_no_coding_error', \
-                    String(248, convert_unicode='force', unicode_error='ignore'))
-            )
-
-        m2 = MetaData()
-        utf8_table = Table('unicode_err_table', m2,
-            Column('sort', Integer),
-            Column('plain_varchar_no_coding_error', \
-                    String(248, convert_unicode=True))
-            )
-
-        engine = engines.testing_engine(options={'encoding':'ascii'})
-        m.create_all(engine)
-        try:
-            # insert a row that should be ascii and
-            # coerce from unicode with ignore on the bind side
-            engine.execute(
-                table.insert(),
-                sort=1,
-                plain_varchar_no_coding_error=unicodedata
-            )
-
-            # switch to utf-8
-            engine.dialect.encoding = 'utf-8'
-            from binascii import hexlify
-
-            # the row that we put in was stored as hexlified ascii
-            row = engine.execute(utf8_table.select()).first()
-            x = row['plain_varchar_no_coding_error']
-            connect_opts = engine.dialect.create_connect_args(testing.db.url)[1]
-            if isinstance(x, unicode):
-                x = x.encode('utf-8')
-            a = hexlify(x)
-            b = hexlify(asciidata)
-            eq_(a, b)
-
-            # insert another row which will be stored with
-            # utf-8 only chars
-            engine.execute(
-                utf8_table.insert(),
-                sort=2,
-                plain_varchar_no_coding_error=unicodedata
-            )
-
-            # switch back to ascii
-            engine.dialect.encoding = 'ascii'
-
-            # one row will be ascii with ignores,
-            # the other will be either ascii with the ignores
-            # or just the straight unicode+ utf8 value if the
-            # dialect just returns unicode
-            result = engine.execute(table.select().order_by(table.c.sort))
-            ascii_row = result.fetchone()
-            utf8_row = result.fetchone()
-            result.close()
-
-            x = ascii_row['plain_varchar_no_coding_error']
-            # on python3 "x" comes back as string (i.e. unicode),
-            # hexlify requires bytes
-            a = hexlify(x.encode('utf-8'))
-            b = hexlify(asciidata)
-            eq_(a, b)
-
-            x = utf8_row['plain_varchar_no_coding_error']
-            if testing.against('mssql+pyodbc') and not testing.db.dialect.freetds:
-                # TODO: no clue what this is
-                eq_(
-                      x,
-                      u'Alors vous imaginez ma surprise, au lever du jour, quand une '
-                      u'drle de petite voix ma rveill. Elle disait:  Sil vous plat '
-                      u'dessine-moi un mouton! '
-                )
-            elif engine.dialect.returns_unicode_strings:
-                eq_(x, unicodedata)
-            else:
-                a = hexlify(x)
-                eq_(a, b)
-
-        finally:
-            m.drop_all(engine)
+        utfdata = unicodedata.encode('utf8')
+        eq_(
+            proc(utfdata),
+            unicodedata.encode('ascii', 'ignore').decode()
+        )
 
 
 class EnumTest(fixtures.TestBase):
@@ -917,12 +794,12 @@ class EnumTest(fixtures.TestBase):
         metadata = MetaData(testing.db)
         enum_table = Table('enum_table', metadata,
             Column("id", Integer, primary_key=True),
-            Column('someenum', Enum('one','two','three', name='myenum'))
+            Column('someenum', Enum('one', 'two', 'three', name='myenum'))
         )
 
         non_native_enum_table = Table('non_native_enum_table', metadata,
             Column("id", Integer, primary_key=True),
-            Column('someenum', Enum('one','two','three', native_enum=False)),
+            Column('someenum', Enum('one', 'two', 'three', native_enum=False)),
         )
 
         metadata.create_all()
@@ -1018,7 +895,7 @@ class EnumTest(fixtures.TestBase):
 class BinaryTest(fixtures.TestBase, AssertsExecutionResults):
     __excluded_on__ = (
         ('mysql', '<', (4, 1, 1)),  # screwy varbinary types
-        )
+    )
 
     @classmethod
     def setup_class(cls):
@@ -1101,8 +978,7 @@ class BinaryTest(fixtures.TestBase, AssertsExecutionResults):
             eq_(testobj3.moredata, l[0]['mypickle'].moredata)
             eq_(l[0]['mypickle'].stuff, 'this is the right stuff')
 
-    @testing.fails_on('oracle+cx_oracle', 'oracle fairly grumpy about binary '
-                                        'data, not really known how to make this work')
+    @testing.requires.binary_comparisons
     def test_comparison(self):
         """test that type coercion occurs on comparison for binary"""
 
@@ -1137,7 +1013,8 @@ class ExpressionTest(fixtures.TestBase, AssertsExecutionResults, AssertsCompiled
                     return value / 10
                 return process
             def adapt_operator(self, op):
-                return {operators.add:operators.sub, operators.sub:operators.add}.get(op, op)
+                return {operators.add:operators.sub,
+                    operators.sub:operators.add}.get(op, op)
 
         class MyTypeDec(types.TypeDecorator):
             impl = String
@@ -1228,6 +1105,7 @@ class ExpressionTest(fixtures.TestBase, AssertsExecutionResults, AssertsCompiled
         eq_(expr.right.type.__class__, CHAR)
 
 
+    @testing.uses_deprecated
     @testing.fails_on('firebird', 'Data type unknown on the parameter')
     @testing.fails_on('mssql', 'int is unsigned ?  not clear')
     def test_operator_adapt(self):
@@ -1294,7 +1172,6 @@ class ExpressionTest(fixtures.TestBase, AssertsExecutionResults, AssertsCompiled
             "BIND_INfooBIND_IN6BIND_OUT"
         )
 
-
     def test_bind_typing(self):
         from sqlalchemy.sql import column
 
@@ -1305,9 +1182,9 @@ class ExpressionTest(fixtures.TestBase, AssertsExecutionResults, AssertsCompiled
             pass
 
         # unknown type + integer, right hand bind
-        # is an Integer
+        # coerces to given type
         expr = column("foo", MyFoobarType) + 5
-        assert expr.right.type._type_affinity is types.Integer
+        assert expr.right.type._type_affinity is MyFoobarType
 
         # untyped bind - it gets assigned MyFoobarType
         expr = column("foo", MyFoobarType) + bindparam("foo")
@@ -1326,7 +1203,7 @@ class ExpressionTest(fixtures.TestBase, AssertsExecutionResults, AssertsCompiled
         assert expr.right.type._type_affinity is MyFoobarType
 
         expr = column("foo", MyFoobarType) - datetime.date(2010, 8, 25)
-        assert expr.right.type._type_affinity is types.Date
+        assert expr.right.type._type_affinity is MyFoobarType
 
     def test_date_coercion(self):
         from sqlalchemy.sql import column
@@ -1387,329 +1264,72 @@ class ExpressionTest(fixtures.TestBase, AssertsExecutionResults, AssertsCompiled
         assert test_table.c.data.distinct().type == test_table.c.data.type
 
 class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
-    def test_default_compile(self):
-        """test that the base dialect of the type object is used
-        for default compilation.
-
-        """
-
-        for type_, expected in (
-            (String(), "VARCHAR"),
-            (Integer(), "INTEGER"),
-            (dialects.postgresql.INET(), "INET"),
-            (dialects.postgresql.FLOAT(), "FLOAT"),
-            (dialects.mysql.REAL(precision=8, scale=2), "REAL(8, 2)"),
-            (dialects.postgresql.REAL(), "REAL"),
-            (INTEGER(), "INTEGER"),
-            (dialects.mysql.INTEGER(display_width=5), "INTEGER(5)")
-        ):
-            self.assert_compile(type_, expected,
-                                allow_dialect_select=True)
-
-class DateTest(fixtures.TestBase, AssertsExecutionResults):
-    @classmethod
-    def setup_class(cls):
-        global users_with_date, insert_data
-
-        db = testing.db
-        if testing.against('oracle'):
-            insert_data =  [
-                    (7, 'jack',
-                     datetime.datetime(2005, 11, 10, 0, 0),
-                     datetime.date(2005,11,10),
-                     datetime.datetime(2005, 11, 10, 0, 0, 0, 29384)),
-                    (8, 'roy',
-                     datetime.datetime(2005, 11, 10, 11, 52, 35),
-                     datetime.date(2005,10,10),
-                     datetime.datetime(2006, 5, 10, 15, 32, 47, 6754)),
-                    (9, 'foo',
-                     datetime.datetime(2006, 11, 10, 11, 52, 35),
-                     datetime.date(1970,4,1),
-                     datetime.datetime(2004, 9, 18, 4, 0, 52, 1043)),
-                    (10, 'colber', None, None, None),
-             ]
-            fnames = ['user_id', 'user_name', 'user_datetime',
-                      'user_date', 'user_time']
-
-            collist = [Column('user_id', INT, primary_key=True),
-                       Column('user_name', VARCHAR(20)),
-                       Column('user_datetime', DateTime),
-                       Column('user_date', Date),
-                       Column('user_time', TIMESTAMP)]
-        else:
-            datetime_micro = 54839
-            time_micro = 999
-
-            # Missing or poor microsecond support:
-            if testing.against('mssql', 'mysql', 'firebird', '+zxjdbc'):
-                datetime_micro, time_micro = 0, 0
-            # No microseconds for TIME
-            elif testing.against('maxdb'):
-                time_micro = 0
-
-            insert_data =  [
-                (7, 'jack',
-                 datetime.datetime(2005, 11, 10, 0, 0),
-                 datetime.date(2005, 11, 10),
-                 datetime.time(12, 20, 2)),
-                (8, 'roy',
-                 datetime.datetime(2005, 11, 10, 11, 52, 35),
-                 datetime.date(2005, 10, 10),
-                 datetime.time(0, 0, 0)),
-                (9, 'foo',
-                 datetime.datetime(2005, 11, 10, 11, 52, 35, datetime_micro),
-                 datetime.date(1970, 4, 1),
-                 datetime.time(23, 59, 59, time_micro)),
-                (10, 'colber', None, None, None),
-            ]
-
-
-            fnames = ['user_id', 'user_name', 'user_datetime',
-                      'user_date', 'user_time']
-
-            collist = [Column('user_id', INT, primary_key=True),
-                       Column('user_name', VARCHAR(20)),
-                       Column('user_datetime', DateTime(timezone=False)),
-                       Column('user_date', Date),
-                       Column('user_time', Time)]
-
-        if testing.against('sqlite', 'postgresql'):
-            insert_data.append(
-                (11, 'historic',
-                datetime.datetime(1850, 11, 10, 11, 52, 35, datetime_micro),
-                datetime.date(1727,4,1),
-                None),
-            )
-
-        users_with_date = Table('query_users_with_date',
-                                MetaData(testing.db), *collist)
-        users_with_date.create()
-        insert_dicts = [dict(zip(fnames, d)) for d in insert_data]
-
-        for idict in insert_dicts:
-            users_with_date.insert().execute(**idict)
-
-    @classmethod
-    def teardown_class(cls):
-        users_with_date.drop()
-
-    def testdate(self):
-        global insert_data
-
-        l = map(tuple,
-                users_with_date.select().order_by(users_with_date.c.user_id).execute().fetchall())
-        self.assert_(l == insert_data,
-                     'DateTest mismatch: got:%s expected:%s' % (l, insert_data))
-
-    def testtextdate(self):
-        x = testing.db.execute(text(
-            "select user_datetime from query_users_with_date",
-            typemap={'user_datetime':DateTime})).fetchall()
-
-        self.assert_(isinstance(x[0][0], datetime.datetime))
-
-        x = testing.db.execute(text(
-            "select * from query_users_with_date where user_datetime=:somedate",
-            bindparams=[bindparam('somedate', type_=types.DateTime)]),
-            somedate=datetime.datetime(2005, 11, 10, 11, 52, 35)).fetchall()
-
-    def testdate2(self):
-        meta = MetaData(testing.db)
-        t = Table('testdate', meta,
-                  Column('id', Integer,
-                         Sequence('datetest_id_seq', optional=True),
-                         primary_key=True),
-                Column('adate', Date), Column('adatetime', DateTime))
-        t.create(checkfirst=True)
-        try:
-            d1 = datetime.date(2007, 10, 30)
-            t.insert().execute(adate=d1, adatetime=d1)
-            d2 = datetime.datetime(2007, 10, 30)
-            t.insert().execute(adate=d2, adatetime=d2)
-
-            x = t.select().execute().fetchall()[0]
-            eq_(x.adate.__class__, datetime.date)
-            eq_(x.adatetime.__class__, datetime.datetime)
-
-            t.delete().execute()
-
-            # test mismatched date/datetime
-            t.insert().execute(adate=d2, adatetime=d2)
-            eq_(select([t.c.adate, t.c.adatetime], t.c.adate==d1).execute().fetchall(), [(d1, d2)])
-            eq_(select([t.c.adate, t.c.adatetime], t.c.adate==d1).execute().fetchall(), [(d1, d2)])
-
-        finally:
-            t.drop(checkfirst=True)
-
-class StringTest(fixtures.TestBase):
+    __dialect__ = 'default'
 
     @testing.requires.unbounded_varchar
-    def test_nolength_string(self):
-        metadata = MetaData(testing.db)
-        foo = Table('foo', metadata, Column('one', String))
+    def test_string_plain(self):
+        self.assert_compile(String(), "VARCHAR")
 
-        foo.create()
-        foo.drop()
+    def test_string_length(self):
+        self.assert_compile(String(50), "VARCHAR(50)")
 
-class NumericTest(fixtures.TestBase):
-    def setup(self):
-        global metadata
-        metadata = MetaData(testing.db)
+    def test_string_collation(self):
+        self.assert_compile(String(50, collation="FOO"),
+                'VARCHAR(50) COLLATE "FOO"')
 
-    def teardown(self):
-        metadata.drop_all()
+    def test_char_plain(self):
+        self.assert_compile(CHAR(), "CHAR")
 
-    @testing.emits_warning(r".*does \*not\* support Decimal objects natively")
-    def _do_test(self, type_, input_, output, filter_=None, check_scale=False):
-        t = Table('t', metadata, Column('x', type_))
-        t.create()
-        t.insert().execute([{'x':x} for x in input_])
+    def test_char_length(self):
+        self.assert_compile(CHAR(50), "CHAR(50)")
 
-        result = set([row[0] for row in t.select().execute()])
-        output = set(output)
-        if filter_:
-            result = set(filter_(x) for x in result)
-            output = set(filter_(x) for x in output)
-        #print result
-        #print output
-        eq_(result, output)
-        if check_scale:
-            eq_(
-                [str(x) for x in result],
-                [str(x) for x in output],
-            )
+    def test_char_collation(self):
+        self.assert_compile(CHAR(50, collation="FOO"),
+                'CHAR(50) COLLATE "FOO"')
 
-    def test_numeric_as_decimal(self):
-        self._do_test(
-            Numeric(precision=8, scale=4),
-            [15.7563, decimal.Decimal("15.7563"), None],
-            [decimal.Decimal("15.7563"), None],
-        )
+    def test_text_plain(self):
+        self.assert_compile(Text(), "TEXT")
 
-    def test_numeric_as_float(self):
-        if testing.against("oracle+cx_oracle"):
-            filter_ = lambda n:n is not None and round(n, 5) or None
-        else:
-            filter_ = None
+    def test_text_length(self):
+        self.assert_compile(Text(50), "TEXT(50)")
 
-        self._do_test(
-            Numeric(precision=8, scale=4, asdecimal=False),
-            [15.7563, decimal.Decimal("15.7563"), None],
-            [15.7563, None],
-            filter_ = filter_
-        )
+    def test_text_collation(self):
+        self.assert_compile(Text(collation="FOO"),
+                'TEXT COLLATE "FOO"')
 
-    def test_float_as_decimal(self):
-        self._do_test(
-            Float(precision=8, asdecimal=True),
-            [15.7563, decimal.Decimal("15.7563"), None],
-            [decimal.Decimal("15.7563"), None],
-            filter_ = lambda n:n is not None and round(n, 5) or None
-        )
+    def test_default_compile_pg_inet(self):
+        self.assert_compile(dialects.postgresql.INET(), "INET",
+                allow_dialect_select=True)
 
-    def test_float_as_float(self):
-        self._do_test(
-            Float(precision=8),
-            [15.7563, decimal.Decimal("15.7563")],
-            [15.7563],
-            filter_ = lambda n:n is not None and round(n, 5) or None
-        )
+    def test_default_compile_pg_float(self):
+        self.assert_compile(dialects.postgresql.FLOAT(), "FLOAT",
+                allow_dialect_select=True)
 
-    @testing.fails_on('mssql+pymssql', 'FIXME: improve pymssql dec handling')
-    def test_precision_decimal(self):
-        numbers = set([
-            decimal.Decimal("54.234246451650"),
-            decimal.Decimal("0.004354"),
-            decimal.Decimal("900.0"),
-        ])
+    def test_default_compile_mysql_integer(self):
+        self.assert_compile(
+                dialects.mysql.INTEGER(display_width=5), "INTEGER(5)",
+                allow_dialect_select=True)
 
-        self._do_test(
-            Numeric(precision=18, scale=12),
-            numbers,
-            numbers,
-        )
+    def test_numeric_plain(self):
+        self.assert_compile(types.NUMERIC(), 'NUMERIC')
 
-    @testing.fails_on('mssql+pymssql', 'FIXME: improve pymssql dec handling')
-    def test_enotation_decimal(self):
-        """test exceedingly small decimals.
+    def test_numeric_precision(self):
+        self.assert_compile(types.NUMERIC(2), 'NUMERIC(2)')
 
-        Decimal reports values with E notation when the exponent
-        is greater than 6.
+    def test_numeric_scale(self):
+        self.assert_compile(types.NUMERIC(2, 4), 'NUMERIC(2, 4)')
 
-        """
+    def test_decimal_plain(self):
+        self.assert_compile(types.DECIMAL(), 'DECIMAL')
 
-        numbers = set([
-            decimal.Decimal('1E-2'),
-            decimal.Decimal('1E-3'),
-            decimal.Decimal('1E-4'),
-            decimal.Decimal('1E-5'),
-            decimal.Decimal('1E-6'),
-            decimal.Decimal('1E-7'),
-            decimal.Decimal('1E-8'),
-            decimal.Decimal("0.01000005940696"),
-            decimal.Decimal("0.00000005940696"),
-            decimal.Decimal("0.00000000000696"),
-            decimal.Decimal("0.70000000000696"),
-            decimal.Decimal("696E-12"),
-        ])
-        self._do_test(
-            Numeric(precision=18, scale=14),
-            numbers,
-            numbers
-        )
+    def test_decimal_precision(self):
+        self.assert_compile(types.DECIMAL(2), 'DECIMAL(2)')
 
-    @testing.fails_on("sybase+pyodbc",
-                        "Don't know how do get these values through FreeTDS + Sybase")
-    @testing.fails_on("firebird", "Precision must be from 1 to 18")
-    def test_enotation_decimal_large(self):
-        """test exceedingly large decimals.
+    def test_decimal_scale(self):
+        self.assert_compile(types.DECIMAL(2, 4), 'DECIMAL(2, 4)')
 
-        """
 
-        numbers = set([
-            decimal.Decimal('4E+8'),
-            decimal.Decimal("5748E+15"),
-            decimal.Decimal('1.521E+15'),
-            decimal.Decimal('00000000000000.1E+12'),
-        ])
-        self._do_test(
-            Numeric(precision=25, scale=2),
-            numbers,
-            numbers
-        )
 
-    @testing.fails_on('sqlite', 'TODO')
-    @testing.fails_on("firebird", "Precision must be from 1 to 18")
-    @testing.fails_on("sybase+pysybase", "TODO")
-    @testing.fails_on('mssql+pymssql', 'FIXME: improve pymssql dec handling')
-    def test_many_significant_digits(self):
-        numbers = set([
-            decimal.Decimal("31943874831932418390.01"),
-            decimal.Decimal("319438950232418390.273596"),
-            decimal.Decimal("87673.594069654243"),
-        ])
-        self._do_test(
-            Numeric(precision=38, scale=12),
-            numbers,
-            numbers
-        )
-
-    @testing.fails_on('oracle+cx_oracle',
-        "this may be a bug due to the difficulty in handling "
-        "oracle precision numerics"
-    )
-    @testing.fails_on('postgresql+pg8000',
-        "pg-8000 does native decimal but truncates the decimals.")
-    def test_numeric_no_decimal(self):
-        numbers = set([
-            decimal.Decimal("1.000")
-        ])
-        self._do_test(
-            Numeric(precision=5, scale=3),
-            numbers,
-            numbers,
-            check_scale=True
-        )
 
 class NumericRawSQLTest(fixtures.TestBase):
     """Test what DBAPIs and dialects return without any typing
@@ -1757,7 +1377,7 @@ class NumericRawSQLTest(fixtures.TestBase):
         assert isinstance(val, float)
 
         # some DBAPIs have unusual float handling
-        if testing.against('oracle+cx_oracle', 'mysql+oursql'):
+        if testing.against('oracle+cx_oracle', 'mysql+oursql', 'firebird'):
             eq_(round_decimal(val, 3), 46.583)
         else:
             eq_(val, 46.583)

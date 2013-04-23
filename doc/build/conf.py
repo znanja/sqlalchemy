@@ -30,18 +30,15 @@ import sqlalchemy
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-#extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode',
-#                'sphinx.ext.doctest', 'builder.builders']
 
-extensions = ['sphinx.ext.autodoc',
-                'sphinx.ext.doctest',
-                'sphinx.ext.doctest',
+extensions = [
+            'sphinx.ext.autodoc',
                 'builder.autodoc_mods',
                 'builder.changelog',
                 'builder.dialect_info',
                 'builder.mako',
                 'builder.sqlformatter',
-                ]
+            ]
 
 # Add any paths that contain templates here, relative to this directory.
 # not sure why abspath() is needed here, some users
@@ -52,6 +49,7 @@ nitpicky = True
 
 # The suffix of source filenames.
 source_suffix = '.rst'
+
 
 # section names used by the changelog extension.
 changelog_sections = ["general", "orm", "orm declarative", "orm querying", \
@@ -66,6 +64,7 @@ changelog_inner_tag_sort = ["feature", "bug", "moved", "changed", "removed"]
 changelog_render_ticket = "http://www.sqlalchemy.org/trac/ticket/%s"
 changelog_render_pullreq = "https://bitbucket.org/sqlalchemy/sqlalchemy/pull-request/%s"
 changelog_render_changeset = "http://www.sqlalchemy.org/trac/changeset/%s"
+
 
 # The encoding of source files.
 #source_encoding = 'utf-8-sig'
@@ -82,11 +81,11 @@ copyright = u'2007-2013, the SQLAlchemy authors and contributors'
 # built documents.
 #
 # The short X.Y version.
-version = "0.7"
+version = "0.8"
 # The full version, including alpha/beta/rc tags.
-release = "0.7.10"
+release = "0.8.0"
 
-release_date = "February 7, 2013"
+release_date = "March 9, 2013"
 
 site_base = "http://www.sqlalchemy.org"
 
@@ -281,7 +280,7 @@ man_pages = [
 epub_title = u'SQLAlchemy'
 epub_author = u'SQLAlchemy authors'
 epub_publisher = u'SQLAlchemy authors'
-epub_copyright = u'2011, SQLAlchemy authors'
+epub_copyright = u'2013, SQLAlchemy authors'
 
 # The language of the text. It defaults to the language option
 # or en if the language is not set.
@@ -301,7 +300,7 @@ epub_copyright = u'2011, SQLAlchemy authors'
 # The format is a list of tuples containing the path and title.
 #epub_pre_files = []
 
-# HTML files shat should be inserted after the pages created by sphinx.
+# HTML files that should be inserted after the pages created by sphinx.
 # The format is a list of tuples containing the path and title.
 #epub_post_files = []
 

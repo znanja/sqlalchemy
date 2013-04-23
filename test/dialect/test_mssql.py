@@ -1,9 +1,7 @@
 # -*- encoding: utf-8
-from test.lib.testing import eq_
+from sqlalchemy.testing import eq_, engines, pickleable
 import datetime
 import os
-import re
-import warnings
 from sqlalchemy import *
 from sqlalchemy import types, exc, schema, event
 from sqlalchemy.orm import *
@@ -12,11 +10,13 @@ from sqlalchemy.databases import mssql
 from sqlalchemy.dialects.mssql import pyodbc, mxodbc, pymssql
 from sqlalchemy.dialects.mssql.base import TIME
 from sqlalchemy.engine import url
-from test.lib import *
-from test.lib.testing import eq_, emits_warning_on, \
-    assert_raises_message
-from sqlalchemy.util.compat import decimal
+from sqlalchemy.testing import fixtures, AssertsCompiledSQL, \
+        AssertsExecutionResults, ComparesTables
+from sqlalchemy import testing
+from sqlalchemy.testing import emits_warning_on, assert_raises_message
+import decimal
 from sqlalchemy.engine.reflection import Inspector
+from sqlalchemy.util.compat import b
 
 class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
     __dialect__ = mssql.dialect()
@@ -31,7 +31,7 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         self.assert_compile(t.select().with_hint(t, 'WITH (NOLOCK)'),
                             'SELECT sometable.somecolumn FROM sometable WITH (NOLOCK)')
 
-    def test_join_with_hint (self):
+    def test_join_with_hint(self):
         t1 = table('t1',
             column('a', Integer),
             column('b', String),
@@ -153,12 +153,13 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
     #            ""
     #        )
 
-    # TODO: should this be for *all* MS-SQL dialects ?
-    def test_mxodbc_binds(self):
-        """mxodbc uses MS-SQL native binds, which aren't allowed in
-        various places."""
+    def test_strict_binds(self):
+        """test the 'strict' compiler binds."""
 
+        from sqlalchemy.dialects.mssql.base import MSSQLStrictCompiler
         mxodbc_dialect = mxodbc.dialect()
+        mxodbc_dialect.statement_compiler = MSSQLStrictCompiler
+
         t = table('sometable', column('foo'))
 
         for expr, compile in [
@@ -172,21 +173,15 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
                 "IN ('x', 'y', 'z')",
             ),
             (
-                func.foobar("x", "y", 4, 5),
-                "foobar('x', 'y', 4, 5)",
-            ),
-            (
-                select([t]).where(func.len('xyz') > func.len(t.c.foo)),
-                "SELECT sometable.foo FROM sometable WHERE len('xyz') > "
-                "len(sometable.foo)",
+                    t.c.foo.in_([None]),
+                    "sometable.foo IN (NULL)"
             )
         ]:
             self.assert_compile(expr, compile, dialect=mxodbc_dialect)
 
-    @testing.uses_deprecated
     def test_in_with_subqueries(self):
-        """Test that when using subqueries in a binary expression
-        the == and != are changed to IN and NOT IN respectively.
+        """Test removal of legacy behavior that converted "x==subquery"
+        to use IN.
 
         """
 
@@ -194,14 +189,14 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
         self.assert_compile(t.select().where(t.c.somecolumn
                             == t.select()),
                             'SELECT sometable.somecolumn FROM '
-                            'sometable WHERE sometable.somecolumn IN '
+                            'sometable WHERE sometable.somecolumn = '
                             '(SELECT sometable.somecolumn FROM '
                             'sometable)')
         self.assert_compile(t.select().where(t.c.somecolumn
                             != t.select()),
                             'SELECT sometable.somecolumn FROM '
-                            'sometable WHERE sometable.somecolumn NOT '
-                            'IN (SELECT sometable.somecolumn FROM '
+                            'sometable WHERE sometable.somecolumn != '
+                            '(SELECT sometable.somecolumn FROM '
                             'sometable)')
 
     def test_count(self):
@@ -490,6 +485,66 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             checkparams={u'x_1': 5}
         )
 
+    def test_sequence_start_0(self):
+        metadata = MetaData()
+        tbl = Table('test', metadata,
+                    Column('id', Integer, Sequence('', 0), primary_key=True))
+        self.assert_compile(schema.CreateTable(tbl),
+                            "CREATE TABLE test (id INTEGER NOT NULL IDENTITY(0,1), "
+                            "PRIMARY KEY (id))"
+                            )
+
+    def test_sequence_non_primary_key(self):
+        metadata = MetaData()
+        tbl = Table('test', metadata,
+                    Column('id', Integer, Sequence(''), primary_key=False))
+        self.assert_compile(schema.CreateTable(tbl),
+                            "CREATE TABLE test (id INTEGER NOT NULL IDENTITY(1,1))"
+                            )
+
+    def test_sequence_ignore_nullability(self):
+        metadata = MetaData()
+        tbl = Table('test', metadata,
+                    Column('id', Integer, Sequence(''), nullable=True))
+        self.assert_compile(schema.CreateTable(tbl),
+                            "CREATE TABLE test (id INTEGER NOT NULL IDENTITY(1,1))"
+                            )
+
+    def test_index_clustering(self):
+        metadata = MetaData()
+        tbl = Table('test', metadata,
+                    Column('id', Integer))
+        idx = Index("foo", tbl.c.id, mssql_clustered=True)
+        self.assert_compile(schema.CreateIndex(idx),
+                            "CREATE CLUSTERED INDEX foo ON test (id)"
+                            )
+
+    def test_index_ordering(self):
+        metadata = MetaData()
+        tbl = Table('test', metadata,
+                    Column('x', Integer), Column('y', Integer), Column('z', Integer))
+        idx = Index("foo", tbl.c.x.desc(), "y")
+        self.assert_compile(schema.CreateIndex(idx),
+                            "CREATE INDEX foo ON test (x DESC, y)"
+                            )
+
+    def test_index_extra_include_1(self):
+        metadata = MetaData()
+        tbl = Table('test', metadata,
+                    Column('x', Integer), Column('y', Integer), Column('z', Integer))
+        idx = Index("foo", tbl.c.x, mssql_include=['y'])
+        self.assert_compile(schema.CreateIndex(idx),
+                            "CREATE INDEX foo ON test (x) INCLUDE (y)"
+                            )
+
+    def test_index_extra_include_2(self):
+        metadata = MetaData()
+        tbl = Table('test', metadata,
+                    Column('x', Integer), Column('y', Integer), Column('z', Integer))
+        idx = Index("foo", tbl.c.x, mssql_include=[tbl.c.y])
+        self.assert_compile(schema.CreateIndex(idx),
+                            "CREATE INDEX foo ON test (x) INCLUDE (y)"
+                            )
 
 class SchemaAliasingTest(fixtures.TestBase, AssertsCompiledSQL):
     """SQL server cannot reference schema-qualified tables in a SELECT statement, they
@@ -538,7 +593,8 @@ class SchemaAliasingTest(fixtures.TestBase, AssertsCompiledSQL):
         t1, t2 = self.t1, self.t2
         self.assert_compile(
             t1.join(t2, t1.c.a==t2.c.a).select(),
-            "SELECT t1.a, t1.b, t1.c, t2_1.a, t2_1.b, t2_1.c FROM t1 JOIN [schema].t2 AS t2_1 ON t2_1.a = t1.a"
+            "SELECT t1.a, t1.b, t1.c, t2_1.a, t2_1.b, t2_1.c FROM t1 "
+            "JOIN [schema].t2 AS t2_1 ON t2_1.a = t1.a"
         )
 
     def test_union_schema_to_non(self):
@@ -622,8 +678,9 @@ class IdentityInsertTest(fixtures.TestBase, AssertsCompiledSQL):
 class ReflectionTest(fixtures.TestBase, ComparesTables):
     __only_on__ = 'mssql'
 
+    @testing.provide_metadata
     def test_basic_reflection(self):
-        meta = MetaData(testing.db)
+        meta = self.metadata
 
         users = Table(
             'engine_users',
@@ -644,7 +701,6 @@ class ReflectionTest(fixtures.TestBase, ComparesTables):
                    server_default='5'),
             Column('test9', types.BINARY(100)),
             Column('test_numeric', types.Numeric()),
-            test_needs_fk=True,
             )
 
         addresses = Table(
@@ -654,21 +710,17 @@ class ReflectionTest(fixtures.TestBase, ComparesTables):
             Column('remote_user_id', types.Integer,
                    ForeignKey(users.c.user_id)),
             Column('email_address', types.String(20)),
-            test_needs_fk=True,
             )
         meta.create_all()
 
-        try:
-            meta2 = MetaData()
-            reflected_users = Table('engine_users', meta2,
-                                    autoload=True,
-                                    autoload_with=testing.db)
-            reflected_addresses = Table('engine_email_addresses',
-                    meta2, autoload=True, autoload_with=testing.db)
-            self.assert_tables_equal(users, reflected_users)
-            self.assert_tables_equal(addresses, reflected_addresses)
-        finally:
-            meta.drop_all()
+        meta2 = MetaData()
+        reflected_users = Table('engine_users', meta2,
+                                autoload=True,
+                                autoload_with=testing.db)
+        reflected_addresses = Table('engine_email_addresses',
+                meta2, autoload=True, autoload_with=testing.db)
+        self.assert_tables_equal(users, reflected_users)
+        self.assert_tables_equal(addresses, reflected_addresses)
 
     @testing.provide_metadata
     def test_identity(self):
@@ -696,6 +748,41 @@ class ReflectionTest(fixtures.TestBase, ComparesTables):
         t1 = Table('foo', metadata, autoload=True)
         assert isinstance(t1.c.id.type, Integer)
         assert isinstance(t1.c.data.type, types.NullType)
+
+
+    @testing.provide_metadata
+    def test_db_qualified_items(self):
+        metadata = self.metadata
+        Table('foo', metadata, Column('id', Integer, primary_key=True))
+        Table('bar', metadata,
+                Column('id', Integer, primary_key=True),
+                Column('foo_id', Integer, ForeignKey('foo.id', name="fkfoo"))
+            )
+        metadata.create_all()
+
+        dbname = testing.db.scalar("select db_name()")
+        owner = testing.db.scalar("SELECT user_name()")
+
+        inspector = inspect(testing.db)
+        bar_via_db = inspector.get_foreign_keys(
+                            "bar", schema="%s.%s" % (dbname, owner))
+        eq_(
+            bar_via_db,
+            [{
+                'referred_table': 'foo',
+                'referred_columns': ['id'],
+                'referred_schema': 'test.dbo',
+                'name': 'fkfoo',
+                'constrained_columns': ['foo_id']}]
+        )
+
+        assert testing.db.has_table("bar", schema="test.dbo")
+
+        m2 = MetaData()
+        Table('bar', m2, schema="test.dbo", autoload=True,
+                                autoload_with=testing.db)
+        eq_(m2.tables["test.dbo.foo"].schema, "test.dbo")
+
 
     @testing.provide_metadata
     def test_indexes_cols(self):
@@ -774,7 +861,7 @@ class QueryUnicodeTest(fixtures.TestBase):
         finally:
             meta.drop_all()
 
-from test.lib.assertsql import ExactSQL
+from sqlalchemy.testing.assertsql import ExactSQL
 class QueryTest(testing.AssertsExecutionResults, fixtures.TestBase):
     __only_on__ = 'mssql'
 
@@ -1123,28 +1210,28 @@ class MatchTest(fixtures.TestBase, AssertsCompiledSQL):
         eq_([1, 3, 5], [r.id for r in results])
 
 
-class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
-    @classmethod
-    def setup_class(cls):
-        global dialect
-        dialect = pyodbc.dialect()
+class ParseConnectTest(fixtures.TestBase):
 
     def test_pyodbc_connect_dsn_trusted(self):
+        dialect = pyodbc.dialect()
         u = url.make_url('mssql://mydsn')
         connection = dialect.create_connect_args(u)
         eq_([['dsn=mydsn;Trusted_Connection=Yes'], {}], connection)
 
     def test_pyodbc_connect_old_style_dsn_trusted(self):
+        dialect = pyodbc.dialect()
         u = url.make_url('mssql:///?dsn=mydsn')
         connection = dialect.create_connect_args(u)
         eq_([['dsn=mydsn;Trusted_Connection=Yes'], {}], connection)
 
     def test_pyodbc_connect_dsn_non_trusted(self):
+        dialect = pyodbc.dialect()
         u = url.make_url('mssql://username:password@mydsn')
         connection = dialect.create_connect_args(u)
         eq_([['dsn=mydsn;UID=username;PWD=password'], {}], connection)
 
     def test_pyodbc_connect_dsn_extra(self):
+        dialect = pyodbc.dialect()
         u = \
             url.make_url('mssql://username:password@mydsn/?LANGUAGE=us_'
                          'english&foo=bar')
@@ -1154,12 +1241,14 @@ class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
         assert ";foo=bar" in dsn_string
 
     def test_pyodbc_connect(self):
+        dialect = pyodbc.dialect()
         u = url.make_url('mssql://username:password@hostspec/database')
         connection = dialect.create_connect_args(u)
         eq_([['DRIVER={SQL Server};Server=hostspec;Database=database;UI'
             'D=username;PWD=password'], {}], connection)
 
     def test_pyodbc_connect_comma_port(self):
+        dialect = pyodbc.dialect()
         u = \
             url.make_url('mssql://username:password@hostspec:12345/data'
                          'base')
@@ -1168,6 +1257,7 @@ class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
             'ase;UID=username;PWD=password'], {}], connection)
 
     def test_pyodbc_connect_config_port(self):
+        dialect = pyodbc.dialect()
         u = \
             url.make_url('mssql://username:password@hostspec/database?p'
                          'ort=12345')
@@ -1176,6 +1266,7 @@ class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
             'D=username;PWD=password;port=12345'], {}], connection)
 
     def test_pyodbc_extra_connect(self):
+        dialect = pyodbc.dialect()
         u = \
             url.make_url('mssql://username:password@hostspec/database?L'
                          'ANGUAGE=us_english&foo=bar')
@@ -1188,6 +1279,7 @@ class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
             'username;PWD=password;LANGUAGE=us_english;foo=bar'), True)
 
     def test_pyodbc_odbc_connect(self):
+        dialect = pyodbc.dialect()
         u = \
             url.make_url('mssql:///?odbc_connect=DRIVER%3D%7BSQL+Server'
                          '%7D%3BServer%3Dhostspec%3BDatabase%3Ddatabase'
@@ -1197,6 +1289,7 @@ class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
             'D=username;PWD=password'], {}], connection)
 
     def test_pyodbc_odbc_connect_with_dsn(self):
+        dialect = pyodbc.dialect()
         u = \
             url.make_url('mssql:///?odbc_connect=dsn%3Dmydsn%3BDatabase'
                          '%3Ddatabase%3BUID%3Dusername%3BPWD%3Dpassword'
@@ -1206,6 +1299,7 @@ class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
             {}], connection)
 
     def test_pyodbc_odbc_connect_ignores_other_values(self):
+        dialect = pyodbc.dialect()
         u = \
             url.make_url('mssql://userdiff:passdiff@localhost/dbdiff?od'
                          'bc_connect=DRIVER%3D%7BSQL+Server%7D%3BServer'
@@ -1234,7 +1328,22 @@ class ParseConnectTest(fixtures.TestBase, AssertsCompiledSQL):
                     'user': 'scott', 'database': 'test'}], connection
         )
 
-    @testing.only_on(['mssql+pyodbc', 'mssql+pymssql'], "FreeTDS specific test")
+    def test_pymssql_disconnect(self):
+        dialect = pymssql.dialect()
+
+        for error in [
+                'Adaptive Server connection timed out',
+                'message 20003',
+                "Error 10054",
+                "Not connected to any MS SQL server",
+                "Connection is closed"
+                ]:
+            eq_(dialect.is_disconnect(error, None, None), True)
+
+        eq_(dialect.is_disconnect("not an error", None, None), False)
+
+    @testing.only_on(['mssql+pyodbc', 'mssql+pymssql'],
+                            "FreeTDS specific test")
     def test_bad_freetds_warning(self):
         engine = engines.testing_engine()
 
@@ -1262,7 +1371,232 @@ class TimeTypeTest(fixtures.TestBase):
         result_processor = mssql_time_type.result_processor(None, None)
         eq_(expected, result_processor(value))
 
-class TypesTest(fixtures.TestBase, AssertsExecutionResults, ComparesTables):
+
+class TypeDDLTest(fixtures.TestBase):
+    def test_boolean(self):
+        "Exercise type specification for boolean type."
+
+        columns = [
+            # column type, args, kwargs, expected ddl
+            (Boolean, [], {},
+             'BIT'),
+           ]
+
+        metadata = MetaData()
+        table_args = ['test_mssql_boolean', metadata]
+        for index, spec in enumerate(columns):
+            type_, args, kw, res = spec
+            table_args.append(
+                Column('c%s' % index, type_(*args, **kw), nullable=None))
+
+        boolean_table = Table(*table_args)
+        dialect = mssql.dialect()
+        gen = dialect.ddl_compiler(dialect, schema.CreateTable(boolean_table))
+
+        for col in boolean_table.c:
+            index = int(col.name[1:])
+            testing.eq_(gen.get_column_specification(col),
+                           "%s %s" % (col.name, columns[index][3]))
+            self.assert_(repr(col))
+
+
+    def test_numeric(self):
+        "Exercise type specification and options for numeric types."
+
+        columns = [
+            # column type, args, kwargs, expected ddl
+            (types.NUMERIC, [], {},
+             'NUMERIC'),
+            (types.NUMERIC, [None], {},
+             'NUMERIC'),
+            (types.NUMERIC, [12, 4], {},
+             'NUMERIC(12, 4)'),
+
+            (types.Float, [], {},
+             'FLOAT'),
+            (types.Float, [None], {},
+             'FLOAT'),
+            (types.Float, [12], {},
+             'FLOAT(12)'),
+            (mssql.MSReal, [], {},
+             'REAL'),
+
+            (types.Integer, [], {},
+             'INTEGER'),
+            (types.BigInteger, [], {},
+             'BIGINT'),
+            (mssql.MSTinyInteger, [], {},
+             'TINYINT'),
+            (types.SmallInteger, [], {},
+             'SMALLINT'),
+           ]
+
+        metadata = MetaData()
+        table_args = ['test_mssql_numeric', metadata]
+        for index, spec in enumerate(columns):
+            type_, args, kw, res = spec
+            table_args.append(
+                Column('c%s' % index, type_(*args, **kw), nullable=None))
+
+        numeric_table = Table(*table_args)
+        dialect = mssql.dialect()
+        gen = dialect.ddl_compiler(dialect, schema.CreateTable(numeric_table))
+
+        for col in numeric_table.c:
+            index = int(col.name[1:])
+            testing.eq_(gen.get_column_specification(col),
+                           "%s %s" % (col.name, columns[index][3]))
+            self.assert_(repr(col))
+
+
+    def test_char(self):
+        """Exercise COLLATE-ish options on string types."""
+
+        columns = [
+            (mssql.MSChar, [], {},
+             'CHAR'),
+            (mssql.MSChar, [1], {},
+             'CHAR(1)'),
+            (mssql.MSChar, [1], {'collation': 'Latin1_General_CI_AS'},
+             'CHAR(1) COLLATE Latin1_General_CI_AS'),
+
+            (mssql.MSNChar, [], {},
+             'NCHAR'),
+            (mssql.MSNChar, [1], {},
+             'NCHAR(1)'),
+            (mssql.MSNChar, [1], {'collation': 'Latin1_General_CI_AS'},
+             'NCHAR(1) COLLATE Latin1_General_CI_AS'),
+
+            (mssql.MSString, [], {},
+             'VARCHAR(max)'),
+            (mssql.MSString, [1], {},
+             'VARCHAR(1)'),
+            (mssql.MSString, [1], {'collation': 'Latin1_General_CI_AS'},
+             'VARCHAR(1) COLLATE Latin1_General_CI_AS'),
+
+            (mssql.MSNVarchar, [], {},
+             'NVARCHAR(max)'),
+            (mssql.MSNVarchar, [1], {},
+             'NVARCHAR(1)'),
+            (mssql.MSNVarchar, [1], {'collation': 'Latin1_General_CI_AS'},
+             'NVARCHAR(1) COLLATE Latin1_General_CI_AS'),
+
+            (mssql.MSText, [], {},
+             'TEXT'),
+            (mssql.MSText, [], {'collation': 'Latin1_General_CI_AS'},
+             'TEXT COLLATE Latin1_General_CI_AS'),
+
+            (mssql.MSNText, [], {},
+             'NTEXT'),
+            (mssql.MSNText, [], {'collation': 'Latin1_General_CI_AS'},
+             'NTEXT COLLATE Latin1_General_CI_AS'),
+           ]
+
+        metadata = MetaData()
+        table_args = ['test_mssql_charset', metadata]
+        for index, spec in enumerate(columns):
+            type_, args, kw, res = spec
+            table_args.append(
+                Column('c%s' % index, type_(*args, **kw), nullable=None))
+
+        charset_table = Table(*table_args)
+        dialect = mssql.dialect()
+        gen = dialect.ddl_compiler(dialect, schema.CreateTable(charset_table))
+
+        for col in charset_table.c:
+            index = int(col.name[1:])
+            testing.eq_(gen.get_column_specification(col),
+                           "%s %s" % (col.name, columns[index][3]))
+            self.assert_(repr(col))
+
+
+    def test_timestamp(self):
+        """Exercise TIMESTAMP column."""
+
+        dialect = mssql.dialect()
+
+        metadata = MetaData()
+        spec, expected = (TIMESTAMP, 'TIMESTAMP')
+        t = Table('mssql_ts', metadata,
+                   Column('id', Integer, primary_key=True),
+                   Column('t', spec, nullable=None))
+        gen = dialect.ddl_compiler(dialect, schema.CreateTable(t))
+        testing.eq_(gen.get_column_specification(t.c.t), "t %s" % expected)
+        self.assert_(repr(t.c.t))
+
+    def test_money(self):
+        """Exercise type specification for money types."""
+
+        columns = [(mssql.MSMoney, [], {}, 'MONEY'),
+                   (mssql.MSSmallMoney, [], {}, 'SMALLMONEY')]
+        metadata = MetaData()
+        table_args = ['test_mssql_money', metadata]
+        for index, spec in enumerate(columns):
+            type_, args, kw, res = spec
+            table_args.append(Column('c%s' % index, type_(*args, **kw),
+                              nullable=None))
+        money_table = Table(*table_args)
+        dialect = mssql.dialect()
+        gen = dialect.ddl_compiler(dialect,
+                                   schema.CreateTable(money_table))
+        for col in money_table.c:
+            index = int(col.name[1:])
+            testing.eq_(gen.get_column_specification(col), '%s %s'
+                        % (col.name, columns[index][3]))
+            self.assert_(repr(col))
+
+    def test_binary(self):
+        "Exercise type specification for binary types."
+
+        columns = [
+            # column type, args, kwargs, expected ddl
+            (mssql.MSBinary, [], {},
+             'BINARY'),
+            (mssql.MSBinary, [10], {},
+             'BINARY(10)'),
+
+            (types.BINARY, [], {},
+             'BINARY'),
+            (types.BINARY, [10], {},
+             'BINARY(10)'),
+
+            (mssql.MSVarBinary, [], {},
+             'VARBINARY(max)'),
+            (mssql.MSVarBinary, [10], {},
+             'VARBINARY(10)'),
+
+            (types.VARBINARY, [10], {},
+             'VARBINARY(10)'),
+            (types.VARBINARY, [], {},
+             'VARBINARY(max)'),
+
+            (mssql.MSImage, [], {},
+             'IMAGE'),
+
+            (mssql.IMAGE, [], {},
+             'IMAGE'),
+
+            (types.LargeBinary, [], {},
+             'IMAGE'),
+        ]
+
+        metadata = MetaData()
+        table_args = ['test_mssql_binary', metadata]
+        for index, spec in enumerate(columns):
+            type_, args, kw, res = spec
+            table_args.append(Column('c%s' % index, type_(*args, **kw),
+                              nullable=None))
+        binary_table = Table(*table_args)
+        dialect = mssql.dialect()
+        gen = dialect.ddl_compiler(dialect,
+                                   schema.CreateTable(binary_table))
+        for col in binary_table.c:
+            index = int(col.name[1:])
+            testing.eq_(gen.get_column_specification(col), '%s %s'
+                        % (col.name, columns[index][3]))
+            self.assert_(repr(col))
+
+class TypeRoundTripTest(fixtures.TestBase, AssertsExecutionResults, ComparesTables):
     __only_on__ = 'mssql'
 
     @classmethod
@@ -1376,31 +1710,6 @@ class TypesTest(fixtures.TestBase, AssertsExecutionResults, ComparesTables):
         except Exception, e:
             raise e
 
-    def test_money(self):
-        """Exercise type specification for money types."""
-
-        columns = [(mssql.MSMoney, [], {}, 'MONEY'),
-                   (mssql.MSSmallMoney, [], {}, 'SMALLMONEY')]
-        table_args = ['test_mssql_money', metadata]
-        for index, spec in enumerate(columns):
-            type_, args, kw, res = spec
-            table_args.append(Column('c%s' % index, type_(*args, **kw),
-                              nullable=None))
-        money_table = Table(*table_args)
-        dialect = mssql.dialect()
-        gen = dialect.ddl_compiler(dialect,
-                                   schema.CreateTable(money_table))
-        for col in money_table.c:
-            index = int(col.name[1:])
-            testing.eq_(gen.get_column_specification(col), '%s %s'
-                        % (col.name, columns[index][3]))
-            self.assert_(repr(col))
-        try:
-            money_table.create(checkfirst=True)
-            assert True
-        except:
-            raise
-        money_table.drop()
 
     # todo this should suppress warnings, but it does not
     @emits_warning_on('mssql+mxodbc', r'.*does not have any indexes.*')
@@ -1502,7 +1811,8 @@ class TypesTest(fixtures.TestBase, AssertsExecutionResults, ComparesTables):
             == d1).execute().fetchall(), [(d1, t1, d2)])
 
     @emits_warning_on('mssql+mxodbc', r'.*does not have any indexes.*')
-    def test_binary(self):
+    @testing.provide_metadata
+    def test_binary_reflection(self):
         "Exercise type specification for binary types."
 
         columns = [
@@ -1537,20 +1847,13 @@ class TypesTest(fixtures.TestBase, AssertsExecutionResults, ComparesTables):
              'IMAGE'),
         ]
 
+        metadata = self.metadata
         table_args = ['test_mssql_binary', metadata]
         for index, spec in enumerate(columns):
             type_, args, kw, res = spec
             table_args.append(Column('c%s' % index, type_(*args, **kw),
                               nullable=None))
         binary_table = Table(*table_args)
-        dialect = mssql.dialect()
-        gen = dialect.ddl_compiler(dialect,
-                                   schema.CreateTable(binary_table))
-        for col in binary_table.c:
-            index = int(col.name[1:])
-            testing.eq_(gen.get_column_specification(col), '%s %s'
-                        % (col.name, columns[index][3]))
-            self.assert_(repr(col))
         metadata.create_all()
         reflected_binary = Table('test_mssql_binary',
                                  MetaData(testing.db), autoload=True)
@@ -1565,156 +1868,6 @@ class TypesTest(fixtures.TestBase, AssertsExecutionResults, ComparesTables):
                 testing.eq_(col.type.length,
                             binary_table.c[col.name].type.length)
 
-    def test_boolean(self):
-        "Exercise type specification for boolean type."
-
-        columns = [
-            # column type, args, kwargs, expected ddl
-            (Boolean, [], {},
-             'BIT'),
-           ]
-
-        table_args = ['test_mssql_boolean', metadata]
-        for index, spec in enumerate(columns):
-            type_, args, kw, res = spec
-            table_args.append(
-                Column('c%s' % index, type_(*args, **kw), nullable=None))
-
-        boolean_table = Table(*table_args)
-        dialect = mssql.dialect()
-        gen = dialect.ddl_compiler(dialect, schema.CreateTable(boolean_table))
-
-        for col in boolean_table.c:
-            index = int(col.name[1:])
-            testing.eq_(gen.get_column_specification(col),
-                           "%s %s" % (col.name, columns[index][3]))
-            self.assert_(repr(col))
-
-        metadata.create_all()
-
-    def test_numeric(self):
-        "Exercise type specification and options for numeric types."
-
-        columns = [
-            # column type, args, kwargs, expected ddl
-            (types.NUMERIC, [], {},
-             'NUMERIC'),
-            (types.NUMERIC, [None], {},
-             'NUMERIC'),
-            (types.NUMERIC, [12, 4], {},
-             'NUMERIC(12, 4)'),
-
-            (types.Float, [], {},
-             'FLOAT'),
-            (types.Float, [None], {},
-             'FLOAT'),
-            (types.Float, [12], {},
-             'FLOAT(12)'),
-            (mssql.MSReal, [], {},
-             'REAL'),
-
-            (types.Integer, [], {},
-             'INTEGER'),
-            (types.BigInteger, [], {},
-             'BIGINT'),
-            (mssql.MSTinyInteger, [], {},
-             'TINYINT'),
-            (types.SmallInteger, [], {},
-             'SMALLINT'),
-           ]
-
-        table_args = ['test_mssql_numeric', metadata]
-        for index, spec in enumerate(columns):
-            type_, args, kw, res = spec
-            table_args.append(
-                Column('c%s' % index, type_(*args, **kw), nullable=None))
-
-        numeric_table = Table(*table_args)
-        dialect = mssql.dialect()
-        gen = dialect.ddl_compiler(dialect, schema.CreateTable(numeric_table))
-
-        for col in numeric_table.c:
-            index = int(col.name[1:])
-            testing.eq_(gen.get_column_specification(col),
-                           "%s %s" % (col.name, columns[index][3]))
-            self.assert_(repr(col))
-
-        metadata.create_all()
-
-    def test_char(self):
-        """Exercise COLLATE-ish options on string types."""
-
-        columns = [
-            (mssql.MSChar, [], {},
-             'CHAR'),
-            (mssql.MSChar, [1], {},
-             'CHAR(1)'),
-            (mssql.MSChar, [1], {'collation': 'Latin1_General_CI_AS'},
-             'CHAR(1) COLLATE Latin1_General_CI_AS'),
-
-            (mssql.MSNChar, [], {},
-             'NCHAR'),
-            (mssql.MSNChar, [1], {},
-             'NCHAR(1)'),
-            (mssql.MSNChar, [1], {'collation': 'Latin1_General_CI_AS'},
-             'NCHAR(1) COLLATE Latin1_General_CI_AS'),
-
-            (mssql.MSString, [], {},
-             'VARCHAR(max)'),
-            (mssql.MSString, [1], {},
-             'VARCHAR(1)'),
-            (mssql.MSString, [1], {'collation': 'Latin1_General_CI_AS'},
-             'VARCHAR(1) COLLATE Latin1_General_CI_AS'),
-
-            (mssql.MSNVarchar, [], {},
-             'NVARCHAR(max)'),
-            (mssql.MSNVarchar, [1], {},
-             'NVARCHAR(1)'),
-            (mssql.MSNVarchar, [1], {'collation': 'Latin1_General_CI_AS'},
-             'NVARCHAR(1) COLLATE Latin1_General_CI_AS'),
-
-            (mssql.MSText, [], {},
-             'TEXT'),
-            (mssql.MSText, [], {'collation': 'Latin1_General_CI_AS'},
-             'TEXT COLLATE Latin1_General_CI_AS'),
-
-            (mssql.MSNText, [], {},
-             'NTEXT'),
-            (mssql.MSNText, [], {'collation': 'Latin1_General_CI_AS'},
-             'NTEXT COLLATE Latin1_General_CI_AS'),
-           ]
-
-        table_args = ['test_mssql_charset', metadata]
-        for index, spec in enumerate(columns):
-            type_, args, kw, res = spec
-            table_args.append(
-                Column('c%s' % index, type_(*args, **kw), nullable=None))
-
-        charset_table = Table(*table_args)
-        dialect = mssql.dialect()
-        gen = dialect.ddl_compiler(dialect, schema.CreateTable(charset_table))
-
-        for col in charset_table.c:
-            index = int(col.name[1:])
-            testing.eq_(gen.get_column_specification(col),
-                           "%s %s" % (col.name, columns[index][3]))
-            self.assert_(repr(col))
-
-        metadata.create_all()
-
-    def test_timestamp(self):
-        """Exercise TIMESTAMP column."""
-
-        dialect = mssql.dialect()
-
-        spec, expected = (TIMESTAMP,'TIMESTAMP')
-        t = Table('mssql_ts', metadata,
-                   Column('id', Integer, primary_key=True),
-                   Column('t', spec, nullable=None))
-        gen = dialect.ddl_compiler(dialect, schema.CreateTable(t))
-        testing.eq_(gen.get_column_specification(t.c.t), "t %s" % expected)
-        self.assert_(repr(t.c.t))
-        t.create(checkfirst=True)
 
     def test_autoincrement(self):
         Table('ai_1', metadata,
@@ -1794,6 +1947,21 @@ class TypesTest(fixtures.TestBase, AssertsExecutionResults, ComparesTables):
                     assert 1 \
                         not in list(engine.execute(tbl.select()).first())
                 engine.execute(tbl.delete())
+
+class MonkeyPatchedBinaryTest(fixtures.TestBase):
+    __only_on__ = 'mssql+pymssql'
+
+    def test_unicode(self):
+        module = __import__('pymssql')
+        result = module.Binary(u'foo')
+        eq_(result, u'foo')
+
+    def test_bytes(self):
+        module = __import__('pymssql')
+        input = b('\x80\x03]q\x00X\x03\x00\x00\x00oneq\x01a.')
+        expected_result = input
+        result = module.Binary(input)
+        eq_(result, expected_result)
 
 class BinaryTest(fixtures.TestBase, AssertsExecutionResults):
     """Test the Binary and VarBinary types"""

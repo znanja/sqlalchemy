@@ -1,10 +1,10 @@
 """General mapper operations with an emphasis on selecting/loading."""
 
-from test.lib.testing import assert_raises, assert_raises_message
+from sqlalchemy.testing import assert_raises, assert_raises_message
 import sqlalchemy as sa
-from test.lib import testing
+from sqlalchemy import testing
 from sqlalchemy import MetaData, Integer, String, ForeignKey, func, util
-from test.lib.schema import Table, Column
+from sqlalchemy.testing.schema import Table, Column
 from sqlalchemy.engine import default
 from sqlalchemy.orm import mapper, relationship, backref, \
     create_session, class_mapper, configure_mappers, reconstructor, \
@@ -12,10 +12,10 @@ from sqlalchemy.orm import mapper, relationship, backref, \
     column_property, composite, dynamic_loader, \
     comparable_property, Session
 from sqlalchemy.orm.persistence import _sort_states
-from test.lib.testing import eq_, AssertsCompiledSQL
-from test.lib import fixtures
+from sqlalchemy.testing import eq_, AssertsCompiledSQL, is_
+from sqlalchemy.testing import fixtures
 from test.orm import _fixtures
-from test.lib.assertsql import CompiledSQL
+from sqlalchemy.testing.assertsql import CompiledSQL
 import logging
 
 class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
@@ -55,6 +55,8 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
     def test_utils(self):
         users = self.tables.users
+        addresses = self.tables.addresses
+        Address = self.classes.Address
 
         from sqlalchemy.orm.util import _is_mapped_class, _is_aliased_class
 
@@ -63,7 +65,10 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
             @property
             def y(self):
                 return "somethign else"
-        m = mapper(Foo, users)
+
+
+        m = mapper(Foo, users, properties={"addresses":relationship(Address)})
+        mapper(Address, addresses)
         a1 = aliased(Foo)
 
         f = Foo()
@@ -71,6 +76,8 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         for fn, arg, ret in [
             (_is_mapped_class, Foo.x, False),
             (_is_mapped_class, Foo.y, False),
+            (_is_mapped_class, Foo.name, False),
+            (_is_mapped_class, Foo.addresses, False),
             (_is_mapped_class, Foo, True),
             (_is_mapped_class, f, False),
             (_is_mapped_class, a1, True),
@@ -85,15 +92,28 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         ]:
             assert fn(arg) == ret
 
+    def test_entity_descriptor(self):
+        users = self.tables.users
 
+        from sqlalchemy.orm.util import _entity_descriptor
 
-    def test_prop_accessor(self):
-        users, User = self.tables.users, self.classes.User
+        class Foo(object):
+            x = "something"
+            @property
+            def y(self):
+                return "somethign else"
+        m = mapper(Foo, users)
+        a1 = aliased(Foo)
 
-        mapper(User, users)
-        assert_raises(NotImplementedError,
-                          getattr, sa.orm.class_mapper(User), 'properties')
+        f = Foo()
 
+        for arg, key, ret in [
+            (m, "x", Foo.x),
+            (Foo, "x", Foo.x),
+            (a1, "x", a1.x),
+            (users, "name", users.c.name)
+        ]:
+            assert _entity_descriptor(arg, key) is ret
 
     def test_friendly_attribute_str_on_uncompiled_boom(self):
         User, users = self.classes.User, self.tables.users
@@ -367,6 +387,58 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
                                         })
         assert m.get_property('addresses')
 
+    def test_info(self):
+        users = self.tables.users
+        Address = self.classes.Address
+        class MyComposite(object):
+            pass
+        for constructor, args in [
+            (column_property, (users.c.name,)),
+            (relationship, (Address,)),
+            (composite, (MyComposite, 'id', 'name'))
+        ]:
+            obj = constructor(info={"x": "y"}, *args)
+            eq_(obj.info, {"x": "y"})
+            obj.info["q"] = "p"
+            eq_(obj.info, {"x": "y", "q": "p"})
+
+            obj = constructor(*args)
+            eq_(obj.info, {})
+            obj.info["q"] = "p"
+            eq_(obj.info, {"q": "p"})
+
+    def test_info_via_instrumented(self):
+        m = MetaData()
+        # create specific tables here as we don't want
+        # users.c.id.info to be pre-initialized
+        users = Table('u', m, Column('id', Integer, primary_key=True),
+                            Column('name', String))
+        addresses = Table('a', m, Column('id', Integer, primary_key=True),
+                            Column('name', String),
+                            Column('user_id', Integer, ForeignKey('u.id')))
+        Address = self.classes.Address
+        User = self.classes.User
+
+        mapper(User, users, properties={
+                "name_lower": column_property(func.lower(users.c.name)),
+                "addresses": relationship(Address)
+            })
+        mapper(Address, addresses)
+
+        # attr.info goes down to the original Column object
+        # for the dictionary.  The annotated element needs to pass
+        # this on.
+        assert 'info' not in users.c.id.__dict__
+        is_(User.id.info, users.c.id.info)
+        assert 'info' in users.c.id.__dict__
+
+        # for SQL expressions, ORM-level .info
+        is_(User.name_lower.info, User.name_lower.property.info)
+
+        # same for relationships
+        is_(User.addresses.info, User.addresses.property.info)
+
+
     def test_add_property(self):
         users, addresses, Address = (self.tables.users,
                                 self.tables.addresses,
@@ -447,7 +519,7 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         assert hasattr(User, 'addresses')
         assert "addresses" in [p.key for p in m1._polymorphic_properties]
 
-    def test_replace_property(self):
+    def test_replace_col_prop_w_syn(self):
         users, User = self.tables.users, self.classes.User
 
         m = mapper(User, users)
@@ -472,6 +544,24 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         eq_(u.name, 'jack')
         u.name = 'jacko'
         assert m._columntoproperty[users.c.name] is m.get_property('_name')
+
+    def test_replace_rel_prop_with_rel_warns(self):
+        users, User = self.tables.users, self.classes.User
+        addresses, Address = self.tables.addresses, self.classes.Address
+
+        m = mapper(User, users, properties={
+                "addresses": relationship(Address)
+            })
+        mapper(Address, addresses)
+
+        assert_raises_message(
+            sa.exc.SAWarning,
+            "Property User.addresses on Mapper|User|users being replaced "
+            "with new property User.addresses; the old property will "
+            "be discarded",
+            m.add_property,
+            "addresses", relationship(Address)
+        )
 
     def test_add_column_prop_deannotate(self):
         User, users = self.classes.User, self.tables.users
@@ -522,6 +612,8 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
         assert User.x.property.columns[0] is not expr
         assert User.x.property.columns[0].element.left is users.c.name
+        # a deannotate needs to clone the base, in case
+        # the original one referenced annotated elements.
         assert User.x.property.columns[0].element.right is not expr.right
 
         assert User.y.property.columns[0] is not expr2
@@ -1086,8 +1178,6 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         assert_col = []
         class extendedproperty(property):
             attribute = 123
-            def __getitem__(self, key):
-                return 'value'
 
         class User(object):
             def _get_name(self):
@@ -1147,7 +1237,6 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
         assert u in sess.dirty
 
         eq_(User.uname.attribute, 123)
-        eq_(User.uname['key'], 'value')
 
     def test_synonym_of_synonym(self):
         users,  User = (self.tables.users,
@@ -1244,10 +1333,8 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
             def method1(self):
                 return "method1"
 
-            def __getitem__(self, key):
-                return 'value'
-
-        class UCComparator(sa.orm.PropComparator):
+        from sqlalchemy.orm.properties import ColumnProperty
+        class UCComparator(ColumnProperty.Comparator):
             __hash__ = None
 
             def method1(self):
@@ -1292,7 +1379,8 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
             assert_raises_message(
                 AttributeError,
-                "Neither 'extendedproperty' object nor 'UCComparator' object has an attribute 'nonexistent'",
+                "Neither 'extendedproperty' object nor 'UCComparator' "
+                "object associated with User.uc_name has an attribute 'nonexistent'",
                 getattr, User.uc_name, 'nonexistent')
 
             # test compile
@@ -1311,13 +1399,12 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
             sess.expunge_all()
 
             q = sess.query(User)
-            u2 = q.filter(User.name=='some user name').one()
-            u3 = q.filter(User.uc_name=='SOME USER NAME').one()
+            u2 = q.filter(User.name == 'some user name').one()
+            u3 = q.filter(User.uc_name == 'SOME USER NAME').one()
 
             assert u2 is u3
 
             eq_(User.uc_name.attribute, 123)
-            eq_(User.uc_name['key'], 'value')
             sess.rollback()
 
     def test_comparable_column(self):
@@ -1327,23 +1414,33 @@ class MapperTest(_fixtures.FixtureTest, AssertsCompiledSQL):
             __hash__ = None
             def __eq__(self, other):
                 # lower case comparison
-                return func.lower(self.__clause_element__()) == func.lower(other)
+                return func.lower(self.__clause_element__()
+                                ) == func.lower(other)
 
             def intersects(self, other):
                 # non-standard comparator
                 return self.__clause_element__().op('&=')(other)
 
         mapper(User, users, properties={
-            'name':sa.orm.column_property(users.c.name, comparator_factory=MyComparator)
+            'name': sa.orm.column_property(users.c.name,
+                        comparator_factory=MyComparator)
         })
 
         assert_raises_message(
             AttributeError,
-            "Neither 'InstrumentedAttribute' object nor 'MyComparator' object has an attribute 'nonexistent'",
+            "Neither 'InstrumentedAttribute' object nor "
+            "'MyComparator' object associated with User.name has "
+            "an attribute 'nonexistent'",
             getattr, User.name, "nonexistent")
 
-        eq_(str((User.name == 'ed').compile(dialect=sa.engine.default.DefaultDialect())) , "lower(users.name) = lower(:lower_1)")
-        eq_(str((User.name.intersects('ed')).compile(dialect=sa.engine.default.DefaultDialect())), "users.name &= :name_1")
+        eq_(
+            str((User.name == 'ed').compile(
+                            dialect=sa.engine.default.DefaultDialect())),
+            "lower(users.name) = lower(:lower_1)")
+        eq_(
+            str((User.name.intersects('ed')).compile(
+                            dialect=sa.engine.default.DefaultDialect())),
+            "users.name &= :name_1")
 
 
     def test_reentrant_compile(self):
@@ -2152,28 +2249,46 @@ class ComparatorFactoryTest(_fixtures.FixtureTest, AssertsCompiledSQL):
 
         from sqlalchemy.orm.properties import PropertyLoader
 
+        # NOTE: this API changed in 0.8, previously __clause_element__()
+        # gave the parent selecatable, now it gives the
+        # primaryjoin/secondaryjoin
         class MyFactory(PropertyLoader.Comparator):
             __hash__ = None
             def __eq__(self, other):
-                return func.foobar(self.__clause_element__().c.user_id) == func.foobar(other.id)
+                return func.foobar(self._source_selectable().c.user_id) == \
+                    func.foobar(other.id)
 
         class MyFactory2(PropertyLoader.Comparator):
             __hash__ = None
             def __eq__(self, other):
-                return func.foobar(self.__clause_element__().c.id) == func.foobar(other.user_id)
+                return func.foobar(self._source_selectable().c.id) == \
+                    func.foobar(other.user_id)
 
         mapper(User, users)
         mapper(Address, addresses, properties={
-            'user':relationship(User, comparator_factory=MyFactory,
+            'user': relationship(User, comparator_factory=MyFactory,
                 backref=backref("addresses", comparator_factory=MyFactory2)
             )
             }
         )
-        self.assert_compile(Address.user == User(id=5), "foobar(addresses.user_id) = foobar(:foobar_1)", dialect=default.DefaultDialect())
-        self.assert_compile(User.addresses == Address(id=5, user_id=7), "foobar(users.id) = foobar(:foobar_1)", dialect=default.DefaultDialect())
 
-        self.assert_compile(aliased(Address).user == User(id=5), "foobar(addresses_1.user_id) = foobar(:foobar_1)", dialect=default.DefaultDialect())
-        self.assert_compile(aliased(User).addresses == Address(id=5, user_id=7), "foobar(users_1.id) = foobar(:foobar_1)", dialect=default.DefaultDialect())
+        # these are kind of nonsensical tests.
+        self.assert_compile(Address.user == User(id=5),
+                "foobar(addresses.user_id) = foobar(:foobar_1)",
+                dialect=default.DefaultDialect())
+        self.assert_compile(User.addresses == Address(id=5, user_id=7),
+                "foobar(users.id) = foobar(:foobar_1)",
+                dialect=default.DefaultDialect())
+
+        self.assert_compile(
+                aliased(Address).user == User(id=5),
+                "foobar(addresses_1.user_id) = foobar(:foobar_1)",
+                dialect=default.DefaultDialect())
+
+        self.assert_compile(
+                aliased(User).addresses == Address(id=5, user_id=7),
+                "foobar(users_1.id) = foobar(:foobar_1)",
+                dialect=default.DefaultDialect())
 
 
 class DeferredTest(_fixtures.FixtureTest):
@@ -3076,6 +3191,61 @@ class RequirementsTest(fixtures.MappedTest):
         h2.value = "Asdf"
         h2.value = "asdf asdf" # ding
 
+class IsUserlandTest(fixtures.MappedTest):
+    @classmethod
+    def define_tables(cls, metadata):
+        Table('foo', metadata,
+            Column('id', Integer, primary_key=True),
+            Column('someprop', Integer)
+        )
+
+    def _test(self, value, instancelevel=None):
+        class Foo(object):
+            someprop = value
+
+        m = mapper(Foo, self.tables.foo)
+        eq_(Foo.someprop, value)
+        f1 = Foo()
+        if instancelevel is not None:
+            eq_(f1.someprop, instancelevel)
+        else:
+            eq_(f1.someprop, value)
+        assert self.tables.foo.c.someprop not in m._columntoproperty
+
+    def _test_not(self, value):
+        class Foo(object):
+            someprop = value
+
+        m = mapper(Foo, self.tables.foo)
+        is_(Foo.someprop.property.columns[0], self.tables.foo.c.someprop)
+        assert self.tables.foo.c.someprop in m._columntoproperty
+
+    def test_string(self):
+        self._test("someprop")
+
+    def test_unicode(self):
+        self._test(u"someprop")
+
+    def test_int(self):
+        self._test(5)
+
+    def test_dict(self):
+        self._test({"bar": "bat"})
+
+    def test_set(self):
+        self._test(set([6]))
+
+    def test_column(self):
+        self._test_not(self.tables.foo.c.someprop)
+
+    def test_relationship(self):
+        self._test_not(relationship("bar"))
+
+    def test_descriptor(self):
+        def somefunc(self):
+            return "hi"
+        self._test(property(somefunc), "hi")
+
 class MagicNamesTest(fixtures.MappedTest):
 
     @classmethod
@@ -3135,7 +3305,6 @@ class MagicNamesTest(fixtures.MappedTest):
                       Column(reserved, Integer))
             class T(object):
                 pass
-
             assert_raises_message(
                 KeyError,
                 ('%r: requested attribute name conflicts with '
@@ -3156,6 +3325,5 @@ class MagicNamesTest(fixtures.MappedTest):
                  'instrumentation attribute of the same name'),
                 mapper, M, maps, properties={
                   reserved: maps.c.state})
-
 
 

@@ -1,7 +1,7 @@
-from test.orm import _fixtures
-from sqlalchemy.orm import Session, mapper, aliased
-from test.lib.testing import eq_
-from sqlalchemy.util import NamedTuple
+from . import _fixtures
+from sqlalchemy.orm import loading, Session, aliased
+from sqlalchemy.testing.assertions import eq_
+from sqlalchemy.util import KeyedTuple
 
 # class InstancesTest(_fixtures.FixtureTest):
 # class GetFromIdentityTest(_fixtures.FixtureTest):
@@ -15,8 +15,7 @@ class MergeResultTest(_fixtures.FixtureTest):
 
     @classmethod
     def setup_mappers(cls):
-        User = cls.classes.User
-        mapper(User, cls.tables.users)
+        cls._setup_stock_mapping()
 
     def _fixture(self):
         User = self.classes.User
@@ -34,7 +33,8 @@ class MergeResultTest(_fixtures.FixtureTest):
 
         q = s.query(User)
         collection = [u1, u2, u3, u4]
-        it = q.merge_result(
+        it = loading.merge_result(
+            q,
             collection
         )
         eq_(
@@ -49,7 +49,8 @@ class MergeResultTest(_fixtures.FixtureTest):
 
         q = s.query(User.id)
         collection = [(1, ), (2, ), (7, ), (8, )]
-        it = q.merge_result(
+        it = loading.merge_result(
+            q,
             collection
         )
         eq_(
@@ -63,7 +64,8 @@ class MergeResultTest(_fixtures.FixtureTest):
 
         q = s.query(User, User.id)
         collection = [(u1, 1), (u2, 2), (u3, 7), (u4, 8)]
-        it = q.merge_result(
+        it = loading.merge_result(
+            q,
             collection
         )
         it = list(it)
@@ -78,9 +80,10 @@ class MergeResultTest(_fixtures.FixtureTest):
         User = self.classes.User
 
         q = s.query(User, User.id)
-        kt = lambda *x: NamedTuple(x, ['User', 'id'])
+        kt = lambda *x: KeyedTuple(x, ['User', 'id'])
         collection = [kt(u1, 1), kt(u2, 2), kt(u3, 7), kt(u4, 8)]
-        it = q.merge_result(
+        it = loading.merge_result(
+            q,
             collection
         )
         it = list(it)
@@ -96,9 +99,10 @@ class MergeResultTest(_fixtures.FixtureTest):
 
         ua = aliased(User)
         q = s.query(User, ua)
-        kt = lambda *x: NamedTuple(x, ['User', 'useralias'])
+        kt = lambda *x: KeyedTuple(x, ['User', 'useralias'])
         collection = [kt(u1, u2), kt(u1, None), kt(u2, u3)]
-        it = q.merge_result(
+        it = loading.merge_result(
+            q,
             collection
         )
         eq_(

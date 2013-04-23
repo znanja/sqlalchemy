@@ -3,27 +3,24 @@
 Changes and Migration
 =====================
 
-Migration Guides
-----------------
+SQLAlchemy changelogs and migration guides are now integrated
+within the main documentation.
 
-SQLAlchemy migration guides are now available within the main documentation.
+Current Migration Guide
+------------------------
 
 .. toctree::
 	:maxdepth: 1
 
-	migration_07
-	migration_06
-	migration_05
-	migration_04
+	migration_08
 
 Change logs
 -----------
 
-SQLAlchemy changelogs are now available within the main documentation.
-
 .. toctree::
    :maxdepth: 2
 
+   changelog_08
    changelog_07
    changelog_06
    changelog_05
@@ -32,3 +29,14 @@ SQLAlchemy changelogs are now available within the main documentation.
    changelog_02
    changelog_01
 
+
+Older Migration Guides
+----------------------
+
+.. toctree::
+   :maxdepth: 1
+
+   migration_07
+   migration_06
+   migration_05
+   migration_04

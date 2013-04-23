@@ -1,19 +1,19 @@
-from test.lib.testing import assert_raises
-from test.lib.testing import assert_raises_message
-from test.lib.testing import emits_warning
+from sqlalchemy.testing import assert_raises
+from sqlalchemy.testing import assert_raises_message
+from sqlalchemy.testing import emits_warning
 
 import pickle
 from sqlalchemy import Integer, String, UniqueConstraint, \
     CheckConstraint, ForeignKey, MetaData, Sequence, \
     ForeignKeyConstraint, ColumnDefault, Index, event,\
-    events, Unicode
-from test.lib.schema import Table, Column
+    events, Unicode, types as sqltypes
+from sqlalchemy.testing.schema import Table, Column
 from sqlalchemy import schema, exc
 import sqlalchemy as tsa
-from test.lib import fixtures
-from test.lib import testing
-from test.lib.testing import ComparesTables, AssertsCompiledSQL
-from test.lib.testing import eq_, is_
+from sqlalchemy.testing import fixtures
+from sqlalchemy import testing
+from sqlalchemy.testing import ComparesTables, AssertsCompiledSQL
+from sqlalchemy.testing import eq_, is_
 
 class MetaDataTest(fixtures.TestBase, ComparesTables):
     def test_metadata_connect(self):
@@ -54,7 +54,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
             Column(Integer(), ForeignKey('bat.blah'), doc="this is a col"),
             Column('bar', Integer(), ForeignKey('bat.blah'), primary_key=True,
                                                             key='bar'),
-            Column('bar', Integer(), info={'foo':'bar'}),
+            Column('bar', Integer(), info={'foo': 'bar'}),
         ]:
             c2 = col.copy()
             for attr in ('name', 'type', 'nullable',
@@ -148,21 +148,21 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
     def test_dupe_tables(self):
         metadata = self.metadata
         Table('table1', metadata,
-            Column('col1', Integer, primary_key=True),
-            Column('col2', String(20)))
+                Column('col1', Integer, primary_key=True),
+                Column('col2', String(20)))
 
         metadata.create_all()
         Table('table1', metadata, autoload=True)
         def go():
             Table('table1', metadata,
-                Column('col1', Integer, primary_key=True),
-                Column('col2', String(20)))
+                    Column('col1', Integer, primary_key=True),
+                    Column('col2', String(20)))
         assert_raises_message(
             tsa.exc.InvalidRequestError,
-            "Table 'table1' is already defined for this "\
-            "MetaData instance.  Specify 'extend_existing=True' "\
-            "to redefine options and columns on an existing "\
-            "Table object.",
+                "Table 'table1' is already defined for this "
+                "MetaData instance.  Specify 'extend_existing=True' "
+                "to redefine options and columns on an existing "
+                "Table object.",
             go
         )
 
@@ -361,6 +361,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         a2 = a.tometadata(m2)
         assert b2.c.y.references(a2.c.x)
 
+
     def test_pickle_metadata_sequence_restated(self):
         m1 = MetaData()
         Table('a', m1,
@@ -543,23 +544,23 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
 
         for i, (name, metadata, schema, quote_schema,
                         exp_schema, exp_quote_schema) in enumerate([
-            ('t1', m1, None, None, 'sch1', None),
-            ('t2', m1, 'sch2', None, 'sch2', None),
-            ('t3', m1, 'sch2', True, 'sch2', True),
-            ('t4', m1, 'sch1', None, 'sch1', None),
-            ('t1', m2, None, None, 'sch1', True),
-            ('t2', m2, 'sch2', None, 'sch2', None),
-            ('t3', m2, 'sch2', True, 'sch2', True),
-            ('t4', m2, 'sch1', None, 'sch1', None),
-            ('t1', m3, None, None, 'sch1', False),
-            ('t2', m3, 'sch2', None, 'sch2', None),
-            ('t3', m3, 'sch2', True, 'sch2', True),
-            ('t4', m3, 'sch1', None, 'sch1', None),
-            ('t1', m4, None, None, None, None),
-            ('t2', m4, 'sch2', None, 'sch2', None),
-            ('t3', m4, 'sch2', True, 'sch2', True),
-            ('t4', m4, 'sch1', None, 'sch1', None),
-        ]):
+                                ('t1', m1, None, None, 'sch1', None),
+                                ('t2', m1, 'sch2', None, 'sch2', None),
+                                ('t3', m1, 'sch2', True, 'sch2', True),
+                                ('t4', m1, 'sch1', None, 'sch1', None),
+                                ('t1', m2, None, None, 'sch1', True),
+                                ('t2', m2, 'sch2', None, 'sch2', None),
+                                ('t3', m2, 'sch2', True, 'sch2', True),
+                                ('t4', m2, 'sch1', None, 'sch1', None),
+                                ('t1', m3, None, None, 'sch1', False),
+                                ('t2', m3, 'sch2', None, 'sch2', None),
+                                ('t3', m3, 'sch2', True, 'sch2', True),
+                                ('t4', m3, 'sch1', None, 'sch1', None),
+                                ('t1', m4, None, None, None, None),
+                                ('t2', m4, 'sch2', None, 'sch2', None),
+                                ('t3', m4, 'sch2', True, 'sch2', True),
+                                ('t4', m4, 'sch1', None, 'sch1', None),
+                        ]):
             kw = {}
             if schema is not None:
                 kw['schema'] = schema
@@ -567,10 +568,12 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
                 kw['quote_schema'] = quote_schema
             t = Table(name, metadata, **kw)
             eq_(t.schema, exp_schema, "test %d, table schema" % i)
-            eq_(t.quote_schema, exp_quote_schema, "test %d, table quote_schema" % i)
+            eq_(t.quote_schema, exp_quote_schema,
+                            "test %d, table quote_schema" % i)
             seq = Sequence(name, metadata=metadata, **kw)
             eq_(seq.schema, exp_schema, "test %d, seq schema" % i)
-            eq_(seq.quote_schema, exp_quote_schema, "test %d, seq quote_schema" % i)
+            eq_(seq.quote_schema, exp_quote_schema,
+                            "test %d, seq quote_schema" % i)
 
     def test_manual_dependencies(self):
         meta = MetaData()
@@ -679,6 +682,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
             )
 
 class TableTest(fixtures.TestBase, AssertsCompiledSQL):
+    @testing.skip_if('mssql', 'different col format')
     def test_prefixes(self):
         from sqlalchemy import Table
         table1 = Table("temporary_table_1", MetaData(),
@@ -694,8 +698,8 @@ class TableTest(fixtures.TestBase, AssertsCompiledSQL):
                       Column("col1", Integer),
                       prefixes=["VIRTUAL"])
         self.assert_compile(
-          schema.CreateTable(table2),
-          "CREATE VIRTUAL TABLE temporary_table_2 (col1 INTEGER)"
+            schema.CreateTable(table2),
+            "CREATE VIRTUAL TABLE temporary_table_2 (col1 INTEGER)"
         )
 
     def test_table_info(self):
@@ -746,6 +750,102 @@ class TableTest(fixtures.TestBase, AssertsCompiledSQL):
             extend_existing=True
         )
         is_(t._autoincrement_column, t.c.id)
+
+class SchemaTypeTest(fixtures.TestBase):
+    class MyType(sqltypes.SchemaType, sqltypes.TypeEngine):
+        column = None
+        table = None
+        evt_targets = ()
+
+        def _set_table(self, column, table):
+            super(SchemaTypeTest.MyType, self)._set_table(column, table)
+            self.column = column
+            self.table = table
+
+        def _on_table_create(self, target, bind, **kw):
+            self.evt_targets += (target,)
+
+    def test_independent_schema(self):
+        m = MetaData()
+        type_ = self.MyType(schema="q")
+        t1 = Table('x', m, Column("y", type_), schema="z")
+        eq_(t1.c.y.type.schema, "q")
+
+    def test_inherit_schema(self):
+        m = MetaData()
+        type_ = self.MyType(schema="q", inherit_schema=True)
+        t1 = Table('x', m, Column("y", type_), schema="z")
+        eq_(t1.c.y.type.schema, "z")
+
+    def test_independent_schema_enum(self):
+        m = MetaData()
+        type_ = sqltypes.Enum("a", schema="q")
+        t1 = Table('x', m, Column("y", type_), schema="z")
+        eq_(t1.c.y.type.schema, "q")
+
+    def test_inherit_schema_enum(self):
+        m = MetaData()
+        type_ = sqltypes.Enum("a", "b", "c", schema="q", inherit_schema=True)
+        t1 = Table('x', m, Column("y", type_), schema="z")
+        eq_(t1.c.y.type.schema, "z")
+
+    def test_tometadata_copy_type(self):
+        m1 = MetaData()
+
+        type_ = self.MyType()
+        t1 = Table('x', m1, Column("y", type_))
+
+        m2 = MetaData()
+        t2 = t1.tometadata(m2)
+
+        # metadata isn't set
+        is_(t2.c.y.type.metadata, None)
+
+        # our test type sets table, though
+        is_(t2.c.y.type.table, t2)
+
+    def test_tometadata_independent_schema(self):
+        m1 = MetaData()
+
+        type_ = self.MyType()
+        t1 = Table('x', m1, Column("y", type_))
+
+        m2 = MetaData()
+        t2 = t1.tometadata(m2, schema="bar")
+
+        eq_(t2.c.y.type.schema, None)
+
+    def test_tometadata_inherit_schema(self):
+        m1 = MetaData()
+
+        type_ = self.MyType(inherit_schema=True)
+        t1 = Table('x', m1, Column("y", type_))
+
+        m2 = MetaData()
+        t2 = t1.tometadata(m2, schema="bar")
+
+        eq_(t1.c.y.type.schema, None)
+        eq_(t2.c.y.type.schema, "bar")
+
+    def test_tometadata_independent_events(self):
+        m1 = MetaData()
+
+        type_ = self.MyType()
+        t1 = Table('x', m1, Column("y", type_))
+
+        m2 = MetaData()
+        t2 = t1.tometadata(m2)
+
+        t1.dispatch.before_create(t1, testing.db)
+        eq_(t1.c.y.type.evt_targets, (t1,))
+        eq_(t2.c.y.type.evt_targets, ())
+
+        t2.dispatch.before_create(t2, testing.db)
+        t2.dispatch.before_create(t2, testing.db)
+        eq_(t1.c.y.type.evt_targets, (t1,))
+        eq_(t2.c.y.type.evt_targets, (t2, t2))
+
+
 
 class SchemaTest(fixtures.TestBase, AssertsCompiledSQL):
 
@@ -842,7 +942,7 @@ class UseExistingTest(fixtures.TablesTest):
                           Unicode), autoload=True)
         assert_raises_message(
             exc.InvalidRequestError,
-            "Table 'users' is already defined for this "\
+                "Table 'users' is already defined for this "\
                 "MetaData instance.",
             go
         )
@@ -1083,6 +1183,34 @@ class ConstraintTest(fixtures.TestBase):
         assert s1.c.a.references(t1.c.a)
         assert not s1.c.a.references(t1.c.b)
 
+    def test_invalid_composite_fk_check(self):
+        m = MetaData()
+        t1 = Table('t1', m, Column('x', Integer), Column('y', Integer),
+            ForeignKeyConstraint(['x', 'y'], ['t2.x', 't3.y'])
+        )
+        t2 = Table('t2', m, Column('x', Integer))
+        t3 = Table('t3', m, Column('y', Integer))
+
+        assert_raises_message(
+            exc.ArgumentError,
+            r"ForeignKeyConstraint on t1\(x, y\) refers to "
+                "multiple remote tables: t2 and t3",
+            t1.join, t2
+        )
+        assert_raises_message(
+            exc.ArgumentError,
+            r"ForeignKeyConstraint on t1\(x, y\) refers to "
+                "multiple remote tables: t2 and t3",
+            t1.join, t3
+        )
+
+        assert_raises_message(
+            exc.ArgumentError,
+            r"ForeignKeyConstraint on t1\(x, y\) refers to "
+                "multiple remote tables: t2 and t3",
+            schema.CreateTable(t1).compile
+        )
+
 class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
     """Test Column() construction."""
 
@@ -1228,6 +1356,48 @@ class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
             "object.  Ensure the class includes a _constructor()",
             getattr, select([t1.select().alias()]), 'c'
         )
+
+    def test_custom_create(self):
+        from sqlalchemy.ext.compiler import compiles, deregister
+
+        @compiles(schema.CreateColumn)
+        def compile(element, compiler, **kw):
+            column = element.element
+
+            if "special" not in column.info:
+                return compiler.visit_create_column(element, **kw)
+
+            text = "%s SPECIAL DIRECTIVE %s" % (
+                    column.name,
+                    compiler.type_compiler.process(column.type)
+                )
+            default = compiler.get_column_default_string(column)
+            if default is not None:
+                text += " DEFAULT " + default
+
+            if not column.nullable:
+                text += " NOT NULL"
+
+            if column.constraints:
+                text += " ".join(
+                            compiler.process(const)
+                            for const in column.constraints)
+            return text
+
+        t = Table('mytable', MetaData(),
+                Column('x', Integer, info={"special": True}, primary_key=True),
+                Column('y', String(50)),
+                Column('z', String(20), info={"special": True})
+            )
+
+        self.assert_compile(
+            schema.CreateTable(t),
+            "CREATE TABLE mytable (x SPECIAL DIRECTIVE INTEGER "
+                "NOT NULL, y VARCHAR(50), "
+                "z SPECIAL DIRECTIVE VARCHAR(20), PRIMARY KEY (x))"
+        )
+
+        deregister(schema.CreateColumn)
 
 class ColumnDefaultsTest(fixtures.TestBase):
     """test assignment of default fixures to columns"""
@@ -1383,7 +1553,8 @@ class CatchAllEventsTest(fixtures.TestBase):
     def test_all_events(self):
         canary = []
         def before_attach(obj, parent):
-            canary.append("%s->%s" % (obj.__class__.__name__, parent.__class__.__name__))
+            canary.append("%s->%s" % (obj.__class__.__name__,
+                                parent.__class__.__name__))
 
         def after_attach(obj, parent):
             canary.append("%s->%s" % (obj.__class__.__name__, parent))
@@ -1418,7 +1589,8 @@ class CatchAllEventsTest(fixtures.TestBase):
 
         def evt(target):
             def before_attach(obj, parent):
-                canary.append("%s->%s" % (target.__name__, parent.__class__.__name__))
+                canary.append("%s->%s" % (target.__name__,
+                                        parent.__class__.__name__))
 
             def after_attach(obj, parent):
                 canary.append("%s->%s" % (target.__name__, parent))
@@ -1426,7 +1598,8 @@ class CatchAllEventsTest(fixtures.TestBase):
             event.listen(target, "after_parent_attach", after_attach)
 
         for target in [
-            schema.ForeignKeyConstraint, schema.PrimaryKeyConstraint, schema.UniqueConstraint,
+            schema.ForeignKeyConstraint, schema.PrimaryKeyConstraint,
+            schema.UniqueConstraint,
             schema.CheckConstraint
         ]:
             evt(target)
@@ -1447,11 +1620,12 @@ class CatchAllEventsTest(fixtures.TestBase):
         eq_(
             canary,
             [
-            'PrimaryKeyConstraint->Table', 'PrimaryKeyConstraint->t1',
-            'ForeignKeyConstraint->Table', 'ForeignKeyConstraint->t1',
-            'UniqueConstraint->Table', 'UniqueConstraint->t1',
-            'PrimaryKeyConstraint->Table', 'PrimaryKeyConstraint->t2',
-            'CheckConstraint->Table', 'CheckConstraint->t2',
-            'UniqueConstraint->Table', 'UniqueConstraint->t2'
+                'PrimaryKeyConstraint->Table', 'PrimaryKeyConstraint->t1',
+                'ForeignKeyConstraint->Table', 'ForeignKeyConstraint->t1',
+                'UniqueConstraint->Table', 'UniqueConstraint->t1',
+                'PrimaryKeyConstraint->Table', 'PrimaryKeyConstraint->t2',
+                'CheckConstraint->Table', 'CheckConstraint->t2',
+                'UniqueConstraint->Table', 'UniqueConstraint->t2'
             ]
         )
+

@@ -3,12 +3,77 @@
 0.7 Changelog
 ==============
 
+.. changelog::
+    :version: 0.7.11
+
+    .. change::
+      :tags: bug, orm
+      :tickets: 2699
+
+      Fixed bug when a query of the form:
+      ``query(SubClass).options(subqueryload(Baseclass.attrname))``,
+      where ``SubClass`` is a joined inh of ``BaseClass``,
+      would fail to apply the ``JOIN`` inside the subquery
+      on the attribute load, producing a cartesian product.
+      The populated results still tended to be correct as additional
+      rows are just ignored, so this issue may be present as a
+      performance degradation in applications that are
+      otherwise working correctly.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 2689
+
+      Fixed bug in unit of work whereby a joined-inheritance
+      subclass could insert the row for the "sub" table
+      before the parent table, if the two tables had no
+      ForeignKey constraints set up between them.
+
+    .. change::
+        :tags: feature, postgresql
+        :tickets: 2676
+
+      Added support for Postgresql's traditional SUBSTRING
+      function syntax, renders as "SUBSTRING(x FROM y FOR z)"
+      when regular ``func.substring()`` is used.
+      Courtesy Gunnlaugur Þór Briem.
+
+    .. change::
+        :tags: bug, tests
+        :tickets: 2669
+        :pullreq: 41
+
+      Fixed an import of "logging" in test_execute which was not
+      working on some linux platforms.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 2674
+
+      Improved the error message emitted when a "backref loop" is detected,
+      that is when an attribute event triggers a bidirectional
+      assignment between two other attributes with no end.
+      This condition can occur not just when an object of the wrong
+      type is assigned, but also when an attribute is mis-configured
+      to backref into an existing backref pair.
+
+    .. change::
+      :tags: bug, orm
+      :tickets: 2674
+
+      A warning is emitted when a MapperProperty is assigned to a mapper
+      that replaces an existing property, if the properties in question
+      aren't plain column-based properties.   Replacement of relationship
+      properties is rarely (ever?) what is intended and usually refers to a
+      mapper mis-configuration.   This will also warn if a backref configures
+      itself on top of an existing one in an inheritance relationship
+      (which is an error in 0.8).
 
 .. changelog::
     :version: 0.7.10
     :released: Thu Feb 7 2013
 
-    .. change:
+    .. change::
         :tags: sql, mysql, gae
         :tickets: 2649
 
@@ -36,25 +101,6 @@
         alternate ".key" name for the column.
 
     .. change::
-        :tags: engine, bug
-        :tickets: 2604
-
-      Fixed :meth:`.MetaData.reflect` to correctly use
-      the given :class:`.Connection`, if given, without
-      opening a second connection from that connection's
-      :class:`.Engine`.
-
-    .. change::
-        :tags: mssql, bug
-        :tickets:2607
-
-      Fixed bug whereby using "key" with Column
-      in conjunction with "schema" for the owning
-      Table would fail to locate result rows due
-      to the MSSQL dialect's "schema rendering"
-      logic's failure to take .key into account.
-
-    .. change::
         :tags: mssql, bug
         :tickets: 2638
 
@@ -67,7 +113,7 @@
         :tickets: 2650
 
       Fixed potential memory leak which could occur if an
-      arbitrary number of :func:`.sessionmaker` objects
+      arbitrary number of :class:`.sessionmaker` objects
       were created.   The anonymous subclass created by
       the sessionmaker, when dereferenced, would not be garbage
       collected due to remaining class-level references from the

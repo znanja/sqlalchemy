@@ -1,15 +1,15 @@
 
-from test.lib.testing import eq_, assert_raises, \
+from sqlalchemy.testing import eq_, assert_raises, \
     assert_raises_message, assert_warnings
 from sqlalchemy import *
 from sqlalchemy.orm import attributes
 from sqlalchemy import exc as sa_exc, event
 from sqlalchemy.orm import exc as orm_exc
 from sqlalchemy.orm import *
-from test.lib.util import gc_collect
-from test.lib import testing
-from test.lib import fixtures
-from test.lib import engines
+from sqlalchemy.testing.util import gc_collect
+from sqlalchemy import testing
+from sqlalchemy.testing import fixtures
+from sqlalchemy.testing import engines
 from test.orm._fixtures import FixtureTest
 
 
@@ -111,7 +111,6 @@ class SessionTransactionTest(FixtureTest):
         User, users = self.classes.User, self.tables.users
 
         mapper(User, users)
-        users.delete().execute()
 
         s1 = create_session(bind=testing.db, autocommit=False)
         s2 = create_session(bind=testing.db, autocommit=False)
@@ -120,26 +119,6 @@ class SessionTransactionTest(FixtureTest):
         s1.flush()
 
         assert s2.query(User).all() == []
-
-    @testing.requires.savepoints
-    def test_rollback_ignores_clean_on_savepoint(self):
-        User, users = self.classes.User, self.tables.users
-
-        mapper(User, users)
-
-        s = Session(bind=testing.db)
-        u1 = User(name='u1')
-        u2 = User(name='u2')
-        s.add_all([u1, u2])
-        s.commit()
-        u1.name
-        u2.name
-        s.begin_nested()
-        u2.name = 'u2modified'
-        s.rollback()
-        assert 'name' not in u1.__dict__
-        assert 'name' not in u2.__dict__
-        eq_(u2.name, 'u2')
 
     @testing.requires.two_phase_transactions
     def test_twophase(self):
@@ -379,6 +358,80 @@ class SessionTransactionTest(FixtureTest):
                               sess.begin, subtransactions=True)
         sess.close()
 
+    def test_no_sql_during_commit(self):
+        sess = create_session(bind=testing.db, autocommit=False)
+
+        @event.listens_for(sess, "after_commit")
+        def go(session):
+            session.execute("select 1")
+        assert_raises_message(sa_exc.InvalidRequestError,
+                    "This session is in 'committed' state; no further "
+                    "SQL can be emitted within this transaction.",
+                    sess.commit)
+
+    def test_no_sql_during_prepare(self):
+        sess = create_session(bind=testing.db, autocommit=False, twophase=True)
+
+        sess.prepare()
+
+        assert_raises_message(sa_exc.InvalidRequestError,
+                    "This session is in 'prepared' state; no further "
+                    "SQL can be emitted within this transaction.",
+                    sess.execute, "select 1")
+
+    def test_no_prepare_wo_twophase(self):
+        sess = create_session(bind=testing.db, autocommit=False)
+
+        assert_raises_message(sa_exc.InvalidRequestError,
+                    "'twophase' mode not enabled, or not root "
+                    "transaction; can't prepare.",
+                    sess.prepare)
+
+    def test_closed_status_check(self):
+        sess = create_session()
+        trans = sess.begin()
+        trans.rollback()
+        assert_raises_message(
+                sa_exc.ResourceClosedError,
+                "This transaction is closed",
+                trans.rollback
+        )
+        assert_raises_message(
+                sa_exc.ResourceClosedError,
+                "This transaction is closed",
+                trans.commit
+        )
+
+    def test_deactive_status_check(self):
+        sess = create_session()
+        trans = sess.begin()
+        trans2 = sess.begin(subtransactions=True)
+        trans2.rollback()
+        assert_raises_message(
+            sa_exc.InvalidRequestError,
+            "This Session's transaction has been rolled back by a nested "
+            "rollback\(\) call.  To begin a new transaction, issue "
+            "Session.rollback\(\) first.",
+            trans.commit
+        )
+
+    def test_deactive_status_check_w_exception(self):
+        sess = create_session()
+        trans = sess.begin()
+        trans2 = sess.begin(subtransactions=True)
+        try:
+            raise Exception("test")
+        except:
+            trans2.rollback(_capture_exception=True)
+        assert_raises_message(
+            sa_exc.InvalidRequestError,
+            "This Session's transaction has been rolled back due to a "
+            "previous exception during flush. To begin a new transaction "
+            "with this Session, first issue Session.rollback\(\). "
+            "Original exception was: test",
+            trans.commit
+        )
+
     def _inactive_flushed_session_fixture(self):
         users, User = self.tables.users, self.classes.User
 
@@ -517,6 +570,56 @@ class FixtureDataTest(_LocalFixture):
 
         assert u1.name == 'will'
 
+class CleanSavepointTest(FixtureTest):
+    """test the behavior for [ticket:2452] - rollback on begin_nested()
+    only expires objects tracked as being modified in that transaction.
+
+    """
+    run_inserts = None
+
+    def _run_test(self, update_fn):
+        User, users = self.classes.User, self.tables.users
+
+        mapper(User, users)
+
+        s = Session(bind=testing.db)
+        u1 = User(name='u1')
+        u2 = User(name='u2')
+        s.add_all([u1, u2])
+        s.commit()
+        u1.name
+        u2.name
+        s.begin_nested()
+        update_fn(s, u2)
+        eq_(u2.name, 'u2modified')
+        s.rollback()
+        eq_(u1.__dict__['name'], 'u1')
+        assert 'name' not in u2.__dict__
+        eq_(u2.name, 'u2')
+
+    @testing.requires.savepoints
+    def test_rollback_ignores_clean_on_savepoint(self):
+        User, users = self.classes.User, self.tables.users
+        def update_fn(s, u2):
+            u2.name = 'u2modified'
+        self._run_test(update_fn)
+
+    @testing.requires.savepoints
+    def test_rollback_ignores_clean_on_savepoint_agg_upd_eval(self):
+        User, users = self.classes.User, self.tables.users
+        def update_fn(s, u2):
+            s.query(User).filter_by(name='u2').update(dict(name='u2modified'),
+                                    synchronize_session='evaluate')
+        self._run_test(update_fn)
+
+    @testing.requires.savepoints
+    def test_rollback_ignores_clean_on_savepoint_agg_upd_fetch(self):
+        User, users = self.classes.User, self.tables.users
+        def update_fn(s, u2):
+            s.query(User).filter_by(name='u2').update(dict(name='u2modified'),
+                                    synchronize_session='fetch')
+        self._run_test(update_fn)
+
 class AutoExpireTest(_LocalFixture):
 
     def test_expunge_pending_on_rollback(self):
@@ -558,6 +661,7 @@ class AutoExpireTest(_LocalFixture):
         assert u1 in s
         assert u1 not in s.deleted
 
+    @testing.requires.predictable_gc
     def test_gced_delete_on_rollback(self):
         User, users = self.classes.User, self.tables.users
 
@@ -688,7 +792,7 @@ class RollbackRecoverTest(_LocalFixture):
         u1.name = 'edward'
         a1.email_address = 'foober'
         s.add(u2)
-        assert_raises(sa_exc.FlushError, s.commit)
+        assert_raises(orm_exc.FlushError, s.commit)
         assert_raises(sa_exc.InvalidRequestError, s.commit)
         s.rollback()
         assert u2 not in s
@@ -722,7 +826,7 @@ class RollbackRecoverTest(_LocalFixture):
         a1.email_address = 'foober'
         s.begin_nested()
         s.add(u2)
-        assert_raises(sa_exc.FlushError, s.commit)
+        assert_raises(orm_exc.FlushError, s.commit)
         assert_raises(sa_exc.InvalidRequestError, s.commit)
         s.rollback()
         assert u2 not in s

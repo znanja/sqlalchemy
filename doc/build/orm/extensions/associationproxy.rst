@@ -508,3 +508,5 @@ API Documentation
 .. autoclass:: AssociationProxy
    :members:
    :undoc-members:
+
+.. autodata:: ASSOCIATION_PROXY
